@@ -1,0 +1,17 @@
+# Build outputs
+/bin/
+*.exe
+
+# Local runtime data and secrets
+/.data/
+/.env
+
+# Document generation working files
+/.artifact_tmp/
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+

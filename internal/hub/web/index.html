@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SeeSize 服务器总览</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; background:#0b1020; color:#e8eefc; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at top left,#18264b 0,#0b1020 42%); }
+    header { max-width:1180px; margin:auto; padding:48px 24px 26px; display:flex; align-items:end; justify-content:space-between; gap:20px; }
+    h1 { margin:0; font-size:32px; letter-spacing:-.5px; }
+    .subtitle { color:#97a8ca; margin-top:8px; }
+    .status { color:#9db1d8; font-size:14px; }
+    main { max-width:1180px; margin:auto; padding:0 24px 56px; }
+    .summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:20px; }
+    .summary article,.server { background:rgba(20,29,53,.78); border:1px solid #2a3b65; border-radius:16px; box-shadow:0 18px 45px rgba(0,0,0,.18); }
+    .summary article { padding:18px 20px; }
+    .label { color:#93a5c9; font-size:13px; }
+    .value { margin-top:7px; font-size:27px; font-weight:700; }
+    #servers { display:grid; gap:14px; }
+    .server { padding:20px; }
+    .server-head { display:flex; justify-content:space-between; gap:16px; align-items:center; }
+    .server h2 { margin:0; font-size:19px; }
+    .meta { margin-top:6px; color:#91a4c7; font-size:13px; }
+    .pill { border-radius:999px; padding:6px 10px; font-size:12px; font-weight:700; }
+    .online { color:#79e2ae; background:#123f35; }
+    .offline { color:#ff9a9a; background:#472329; }
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:18px; }
+    .metric { background:#10182c; border-radius:12px; padding:13px; }
+    .metric strong { display:block; margin-top:5px; font-size:17px; }
+    .empty { color:#92a4c5; text-align:center; padding:56px 20px; border:1px dashed #34466f; border-radius:16px; }
+    @media(max-width:760px){header{align-items:start;flex-direction:column}.summary{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>SeeSize</h1><div class="subtitle">多服务器资源监控与磁盘异常定位</div></div>
+    <div id="updated" class="status">正在读取数据</div>
+  </header>
+  <main>
+    <section class="summary">
+      <article><div class="label">服务器总数</div><div id="total" class="value">0</div></article>
+      <article><div class="label">在线</div><div id="online" class="value">0</div></article>
+      <article><div class="label">需关注</div><div id="attention" class="value">0</div></article>
+    </section>
+    <section id="servers"><div class="empty">尚未收到 Agent 数据</div></section>
+  </main>
+  <script>
+    const fmtBytes = value => {
+      if (!value) return '0 B';
+      const units=['B','KB','MB','GB','TB']; let i=0; let n=value;
+      while(n>=1024 && i<units.length-1){n/=1024;i++}
+      return `${n.toFixed(i<2?0:1)} ${units[i]}`;
+    };
+    const pct = (used,total) => total ? `${(used*100/total).toFixed(1)}%` : '暂无';
+    const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    async function refresh(){
+      try {
+        const response=await fetch('/api/v1/servers',{cache:'no-store'});
+        if(!response.ok) throw new Error(`HTTP ${response.status}`);
+        const {servers}=await response.json();
+        const online=servers.filter(s=>s.online).length;
+        const attention=servers.filter(s=>!s.online || (s.metrics?.root_disk?.total_bytes && s.metrics.root_disk.used_bytes/s.metrics.root_disk.total_bytes>=.8)).length;
+        document.querySelector('#total').textContent=servers.length;
+        document.querySelector('#online').textContent=online;
+        document.querySelector('#attention').textContent=attention;
+        document.querySelector('#updated').textContent=`更新时间 ${new Date().toLocaleTimeString()}`;
+        document.querySelector('#servers').innerHTML=servers.length ? servers.map(s=>`
+          <article class="server">
+            <div class="server-head"><div><h2>${esc(s.hostname)}</h2><div class="meta">${esc(s.distribution || s.os)} ${esc(s.system_version)} · ${esc(s.architecture)} · ${esc(s.observed_ip)}</div></div><span class="pill ${s.online?'online':'offline'}">${s.online?'在线':'离线'}</span></div>
+            <div class="metrics">
+              <div class="metric"><div class="label">CPU</div><strong>${Number(s.metrics?.cpu_percent||0).toFixed(1)}%</strong></div>
+              <div class="metric"><div class="label">内存</div><strong>${pct(s.metrics?.memory?.used_bytes,s.metrics?.memory?.total_bytes)}</strong></div>
+              <div class="metric"><div class="label">根磁盘</div><strong>${pct(s.metrics?.root_disk?.used_bytes,s.metrics?.root_disk?.total_bytes)}</strong></div>
+              <div class="metric"><div class="label">网络下行</div><strong>${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s</strong></div>
+            </div>
+          </article>`).join('') : '<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
+      } catch(error){ document.querySelector('#updated').textContent=`读取失败 ${error.message}`; }
+    }
+    refresh(); setInterval(refresh,5000);
+  </script>
+</body>
+</html>
+
