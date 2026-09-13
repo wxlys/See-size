@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/agents/disk-snapshots", s.handleDiskUpload)
 	mux.HandleFunc("GET /api/v1/servers/{agentID}/disk", s.handleDisk)
 	mux.HandleFunc("GET /api/v1/servers/{agentID}/metrics", s.handleHistory)
+	mux.HandleFunc("GET /api/v1/servers/{agentID}/trend", s.handleTrend)
 	mux.HandleFunc("GET /", s.handleIndex)
 	return securityHeaders(mux)
 }

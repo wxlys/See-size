@@ -14,7 +14,7 @@ const assert=require('node:assert/strict');
    const url=new URL(route.request().url());let data;
    if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(__dirname,'../internal/hub/web/index.html'),'utf8')});
    if(url.pathname.endsWith('/servers'))data={servers:[{agent_id:'demo',hostname:'demo',online:++updates===1,os:'linux',architecture:'amd64',observed_ip:'127.0.0.1',metrics:{...metrics,cpu_percent:updates}}]};
-   else if(url.pathname.endsWith('/metrics'))data={samples:[{collected_at:new Date().toISOString(),metrics}]};
+   else if(url.pathname.endsWith('/trend'))data={first:'2026-09-13T00:00:00Z',last:'2026-09-13T00:05:00Z',step_seconds:url.searchParams.get('range')==='24h'?240:10,points:[{at:'2026-09-13T00:00:00Z',average:[2,30,40,10,5],peak:[4,30,40,12,6]}]};
    else data={snapshots:[{root:'/test',at:'2026-09-13T00:00:00Z',complete:true,entries:2,skipped:0,nodes:[{path:'.',bytes:1003},{path:'docs',bytes:1003}]}],changes:[],alerts:[],comparable:false,growth_threshold_bytes:104857600};
    await route.fulfill({json:data});
   });
@@ -33,6 +33,9 @@ const assert=require('node:assert/strict');
   assert.equal(after.html,before.html);assert.ok(Math.abs(after.scroll-before.scroll)<=1);assert.deepEqual(errors,[]);
   await page.locator('[data-disk-toggle]').click();assert.equal(await page.locator('[data-disk]').isVisible(),false);
   await page.locator('[data-disk-toggle]').click();assert.equal(await page.locator('[data-disk]').isVisible(),true);
+  await page.getByLabel('趋势时间范围').selectOption('24h');
+  await page.waitForFunction(()=>document.querySelector('.history-note').textContent.includes('240 秒'));
+  assert.equal(await page.getByLabel('趋势时间范围').inputValue(),'24h');
   console.log('PASS: auto-refresh preserves panel, canvas, focus, scroll, and toggle behavior; online status updates.');
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

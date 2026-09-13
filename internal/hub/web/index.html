@@ -33,6 +33,7 @@
     button { color:#cfe0ff; background:#172544; border:1px solid #385487; border-radius:9px; padding:8px 12px; cursor:pointer; }
     button:hover { background:#20345e; }
     .history { margin-top:16px; padding-top:16px; border-top:1px solid #2a3b65; }
+    select { background:#172544;color:#cfe0ff;border:1px solid #385487;padding:7px;border-radius:8px; }
     .history-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
     .history-head h3 { margin:0; font-size:15px; }
     .charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
@@ -94,7 +95,7 @@
       finally{delete panel.dataset.loading;}
     }
 
-    function drawLines(canvas, samples, series, ceiling){
+    function drawLines(canvas, samples, series, ceiling, step){
       const ratio=window.devicePixelRatio||1;
       const width=Math.max(canvas.clientWidth,220), height=112;
       canvas.width=width*ratio; canvas.height=height*ratio;
@@ -104,12 +105,15 @@
       for(let i=1;i<4;i++){const y=Math.round(height*i/4)+.5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke()}
       const values=series.flatMap(item=>samples.map(item.value)).filter(Number.isFinite);
       const max=Math.max(ceiling||0,...values,1), min=0;
+      const start=samples.length?Date.parse(samples[0].at):0,end=samples.length?Date.parse(samples[samples.length-1].at):0;
       for(const item of series){
-        ctx.strokeStyle=item.color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.beginPath();
+        ctx.strokeStyle=item.color; ctx.lineWidth=item.peak?1:2;ctx.setLineDash(item.peak?[3,3]:[]); ctx.lineJoin='round'; ctx.beginPath();
         samples.forEach((sample,index)=>{
-          const value=item.value(sample); const x=samples.length<2?width/2:index*width/(samples.length-1);
+          const value=item.value(sample); const x=end===start?width/2:(Date.parse(sample.at)-start)*width/(end-start);
           const y=height-5-(Math.max(min,Math.min(max,value))-min)*(height-10)/(max-min||1);
-          index?ctx.lineTo(x,y):ctx.moveTo(x,y);
+          const gap=index && Date.parse(sample.at)-Date.parse(samples[index-1].at)>step*1000*1.5;
+          index&&!gap?ctx.lineTo(x,y):ctx.moveTo(x,y);
+          ctx.fillStyle=item.color;ctx.fillRect(x-1,y-1,2,2);
         });
         ctx.stroke();
       }
@@ -118,28 +122,26 @@
     async function loadHistory(agentID){
       const key=encodeURIComponent(agentID); const panel=document.querySelector(`[data-history="${CSS.escape(key)}"]`);
       if(!panel) return;
-      if(panel.dataset.loading)return;
-      panel.dataset.loading='true';
+      const range=panel.querySelector('select').value;
+      const sequence=Number(panel.dataset.sequence||0)+1;panel.dataset.sequence=sequence;
       try{
-        const response=await fetch(`/api/v1/servers/${key}/metrics`,{cache:'no-store'});
+        const response=await fetch(`/api/v1/servers/${key}/trend?range=${range}`,{cache:'no-store'});
         if(!response.ok) throw new Error(`HTTP ${response.status}`);
-        const {samples}=await response.json();
-        panel.querySelector('.history-note').textContent=samples.length?`最近一小时内的最新 ${samples.length} 个采样点（单次上限 1000） · ${new Date(samples[0].collected_at).toLocaleTimeString()} — ${new Date(samples[samples.length-1].collected_at).toLocaleTimeString()}`:'最近一小时暂无样本';
-        if(!samples.length) return;
-        const memory=s=>s.metrics.memory.total_bytes?s.metrics.memory.used_bytes*100/s.metrics.memory.total_bytes:0;
-        const disk=s=>s.metrics.root_disk.total_bytes?s.metrics.root_disk.used_bytes*100/s.metrics.root_disk.total_bytes:0;
-        drawLines(panel.querySelector('[data-chart="cpu"]'),samples,[{value:s=>s.metrics.cpu_percent,color:'#65d6ad'}],100);
-        drawLines(panel.querySelector('[data-chart="memory"]'),samples,[{value:memory,color:'#7ea7ff'}],100);
-        drawLines(panel.querySelector('[data-chart="network"]'),samples,[
-          {value:s=>s.metrics.network.received_bytes_per_second,color:'#64d8ff'},
-          {value:s=>s.metrics.network.sent_bytes_per_second,color:'#f6b86a'}
-        ]);
-        drawLines(panel.querySelector('[data-chart="disk"]'),samples,[{value:disk,color:'#c78cff'}],100);
-      }catch(error){ panel.querySelector('.history-note').textContent=`历史读取失败：${error.message}`; }
-      finally{delete panel.dataset.loading;}
+        const data=await response.json();if(Number(panel.dataset.sequence)!==sequence)return;
+        const samples=data.points;
+        panel.querySelector('.history-note').textContent=samples.length?`实际数据：${new Date(data.first).toLocaleString()} — ${new Date(data.last).toLocaleString()} · 每 ${data.step_seconds} 秒聚合`:'所选时间范围暂无数据';
+        const lines=(i,color)=>[{value:s=>s.average[i],color},{value:s=>s.peak[i],color,peak:true}];
+        drawLines(panel.querySelector('[data-chart="cpu"]'),samples,lines(0,'#65d6ad'),100,data.step_seconds);
+        drawLines(panel.querySelector('[data-chart="memory"]'),samples,lines(1,'#7ea7ff'),100,data.step_seconds);
+        drawLines(panel.querySelector('[data-chart="network"]'),samples,[...lines(3,'#64d8ff'),...lines(4,'#f6b86a')],0,data.step_seconds);
+        drawLines(panel.querySelector('[data-chart="disk"]'),samples,lines(2,'#c78cff'),100,data.step_seconds);
+        panel.querySelectorAll('.time-axis').forEach(axis=>{axis.textContent=samples.length?`${new Date(samples[0].at).toLocaleString()} — ${new Date(samples[samples.length-1].at).toLocaleString()}`:'';});
+      }catch(error){if(Number(panel.dataset.sequence)===sequence)panel.querySelector('.history-note').textContent=`历史读取失败：${error.message}`; }
     }
 
     function bindHistoryButtons(root){
+      root.querySelector('select').addEventListener('change',()=>loadHistory(decodeURIComponent(root.querySelector('[data-history-toggle]').dataset.historyToggle)));
+      root.querySelectorAll('.chart').forEach(chart=>{const axis=document.createElement('div');axis.className='time-axis label';chart.append(axis);});
       root.querySelectorAll('[data-disk-toggle]').forEach(button=>button.addEventListener('click',()=>{
         const key=button.dataset.diskToggle,id=decodeURIComponent(key);
         diskExpanded.has(id)?diskExpanded.delete(id):diskExpanded.add(id);
@@ -196,7 +198,8 @@
             <div class="actions"><button type="button" data-disk-toggle="${key}">目录空间分析</button></div>
             <section class="history" data-disk="${key}" ${diskExpanded.has(s.agent_id)?'':'hidden'}>正在读取目录快照</section>
             <section class="history" data-history="${key}" ${isExpanded?'':'hidden'}>
-              <div class="history-head"><h3>资源趋势</h3><span class="history-note label">正在读取历史</span></div>
+              <div class="history-head"><h3>资源趋势</h3><select aria-label="趋势时间范围"><option value="30m">最近 30 分钟</option><option value="1h" selected>最近 1 小时</option><option value="24h">最近 24 小时</option></select></div>
+              <p class="history-note label">正在读取历史</p><p class="label">实线：区间平均值 · 虚线：区间峰值 · 空白：该时间段无记录；横轴显示实际已有数据范围</p>
               <div class="charts">
                 <div class="chart"><div class="chart-title"><span>CPU</span><span>%</span></div><canvas data-chart="cpu"></canvas></div>
                 <div class="chart"><div class="chart-title"><span>内存</span><span>%</span></div><canvas data-chart="memory"></canvas></div>
