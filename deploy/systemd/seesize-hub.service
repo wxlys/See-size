@@ -1,0 +1,30 @@
+[Unit]
+Description=SeeSize monitoring hub
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=seesize
+Group=seesize
+WorkingDirectory=@ROOT@
+LoadCredential=admin-token:@ROOT@/admin.token
+ExecStart=@ROOT@/seesize-hub-linux-amd64 -listen 127.0.0.1:18080 -data @ROOT@/data/seesize.db -admin-token-file %d/admin-token -retention-days 7
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=@ROOT@/data
+RestrictSUIDSGID=yes
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target

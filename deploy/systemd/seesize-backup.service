@@ -1,0 +1,23 @@
+[Unit]
+Description=SeeSize verified database backup
+After=seesize-hub.service
+
+[Service]
+Type=oneshot
+User=seesize
+Group=seesize
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/seesize-backup-linux-amd64 -source @ROOT@/data/seesize.db -dir @ROOT@/backups -keep 7
+TimeoutStartSec=6min
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ReadWritePaths=@ROOT@/data @ROOT@/backups
+RestrictSUIDSGID=yes
+StandardOutput=journal
+StandardError=journal

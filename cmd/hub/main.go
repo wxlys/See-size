@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "address for the hub HTTP server")
 	token := flag.String("agent-token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "temporary shared Agent token")
+	adminFile := flag.String("admin-token-file", "", "read management credential from protected file")
 	offlineAfter := flag.Duration("offline-after", 35*time.Second, "time without heartbeat before a server is offline")
 	dataPath := flag.String("data", ".data/seesize.db", "SQLite database path")
 	retentionDays := flag.Int("retention-days", 7, "days to retain metrics and disk snapshots (1..365)")
@@ -42,7 +44,16 @@ func main() {
 		slog.Error("invalid growth threshold", "error", err)
 		os.Exit(2)
 	}
-	if err := app.SetAdminToken(os.Getenv("SEE_SIZE_ADMIN_TOKEN")); err != nil {
+	adminToken := os.Getenv("SEE_SIZE_ADMIN_TOKEN")
+	if *adminFile != "" {
+		body, err := os.ReadFile(*adminFile)
+		if err != nil {
+			slog.Error("unable to read management credential", "error", err)
+			os.Exit(2)
+		}
+		adminToken = strings.TrimSpace(string(body))
+	}
+	if err := app.SetAdminToken(adminToken); err != nil {
 		slog.Error("invalid management credential", "error", err)
 		os.Exit(2)
 	}

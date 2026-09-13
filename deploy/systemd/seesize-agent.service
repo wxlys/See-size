@@ -1,0 +1,30 @@
+[Unit]
+Description=SeeSize resource agent
+After=network-online.target seesize-hub.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=seesize
+Group=seesize
+WorkingDirectory=@ROOT@
+LoadCredential=agent-token:@ROOT@/agent-auth.token
+ExecStart=@ROOT@/seesize-agent-linux-amd64 -hub http://127.0.0.1:18080 -id @AGENT_ID@ -token-file %d/agent-token -interval 10s -scan-root @ROOT@/scan-fixture -scan-interval 30m -scan-rate 1000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target
