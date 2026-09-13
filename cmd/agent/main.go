@@ -32,6 +32,7 @@ func main() {
 	scanTimeout := flag.Duration("scan-timeout", 15*time.Second, "soft scan time limit (up to 1m)")
 	scanDepth := flag.Int("scan-depth", 3, "directory display depth 0..5")
 	scanLimit := flag.Int("scan-max-entries", 20000, "scan entry budget 1..100000")
+	scanRate := flag.Int("scan-rate", 1000, "metadata entries per second (1..100000)")
 	flag.Parse()
 
 	if strings.TrimSpace(*token) == "" || strings.TrimSpace(*agentID) == "" {
@@ -42,7 +43,7 @@ func main() {
 		slog.Error("interval must be at least one second")
 		os.Exit(2)
 	}
-	if *scanRoot != "" && (*once || *scanInterval < time.Minute || *scanTimeout <= 0 || *scanTimeout > time.Minute || *scanDepth < 0 || *scanDepth > 5 || *scanLimit < 1 || *scanLimit > 100000) {
+	if *scanRoot != "" && (*scanRate < 1 || *scanRate > 100000 || *once || *scanInterval < time.Minute || *scanTimeout <= 0 || *scanTimeout > time.Minute || *scanDepth < 0 || *scanDepth > 5 || *scanLimit < 1 || *scanLimit > 100000) {
 		slog.Error("invalid scan settings: requires continuous mode, interval >=1m, timeout (0,1m], depth 0..5, entries 1..100000")
 		os.Exit(2)
 	}
@@ -54,7 +55,7 @@ func main() {
 	if *scanRoot != "" {
 		go disk.Schedule(ctx, *scanInterval, func(parent context.Context) {
 			scanCtx, cancel := context.WithTimeout(parent, *scanTimeout)
-			snapshot, err := disk.Scan(scanCtx, *scanRoot, *scanDepth, *scanLimit)
+			snapshot, err := disk.ScanRate(scanCtx, *scanRoot, *scanDepth, *scanLimit, *scanRate)
 			cancel()
 			if parent.Err() != nil {
 				return

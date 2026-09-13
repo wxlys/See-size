@@ -21,6 +21,7 @@ func run() error {
 	token := flag.String("token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "Agent credential")
 	depth := flag.Int("depth", 3, "directory display depth (0..5)")
 	limit := flag.Int("max-entries", 20000, "maximum entries (up to 100000)")
+	rate := flag.Int("rate", 1000, "metadata entries per second (1..100000)")
 	timeout := flag.Duration("timeout", 15*time.Second, "scan duration limit")
 	flag.Parse()
 	if *root == "" || *timeout <= 0 || *timeout > time.Minute {
@@ -31,7 +32,7 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	snapshot, err := disk.Scan(ctx, *root, *depth, *limit)
+	snapshot, err := disk.ScanRate(ctx, *root, *depth, *limit, *rate)
 	if err != nil {
 		return err
 	}
