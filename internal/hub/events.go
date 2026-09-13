@@ -129,7 +129,7 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) != 1 {
+	if !s.sessionOK(r) && (!strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) != 1) {
 		writeJSON(w, 401, map[string]string{"error": "invalid management credential"})
 		return
 	}

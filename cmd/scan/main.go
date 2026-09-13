@@ -19,11 +19,19 @@ func run() error {
 	id := flag.String("id", os.Getenv("SEE_SIZE_AGENT_ID"), "existing Agent ID")
 	hub := flag.String("hub", os.Getenv("SEE_SIZE_HUB_URL"), "Hub URL; omit for local JSON")
 	token := flag.String("token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "Agent credential")
+	tokenFile := flag.String("token-file", "", "read Agent credential from protected file")
 	depth := flag.Int("depth", 3, "directory display depth (0..5)")
 	limit := flag.Int("max-entries", 20000, "maximum entries (up to 100000)")
 	rate := flag.Int("rate", 1000, "metadata entries per second (1..100000)")
 	timeout := flag.Duration("timeout", 15*time.Second, "scan duration limit")
 	flag.Parse()
+	if *tokenFile != "" {
+		body, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			return err
+		}
+		*token = strings.TrimSpace(string(body))
+	}
 	if *root == "" || *timeout <= 0 || *timeout > time.Minute {
 		return fmt.Errorf("explicit root and timeout in (0,1m] required")
 	}

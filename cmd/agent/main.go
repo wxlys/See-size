@@ -24,6 +24,7 @@ const version = "0.1.0-dev"
 func main() {
 	hubURL := flag.String("hub", envOr("SEE_SIZE_HUB_URL", "http://127.0.0.1:8080"), "SeeSize hub base URL")
 	token := flag.String("token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "Agent credential")
+	tokenFile := flag.String("token-file", "", "read Agent credential from protected file")
 	agentID := flag.String("id", envOr("SEE_SIZE_AGENT_ID", defaultAgentID()), "stable Agent identifier")
 	interval := flag.Duration("interval", 10*time.Second, "heartbeat interval")
 	once := flag.Bool("once", false, "collect and send one heartbeat")
@@ -34,6 +35,14 @@ func main() {
 	scanLimit := flag.Int("scan-max-entries", 20000, "scan entry budget 1..100000")
 	scanRate := flag.Int("scan-rate", 1000, "metadata entries per second (1..100000)")
 	flag.Parse()
+	if *tokenFile != "" {
+		body, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			slog.Error("unable to read credential", "error", err)
+			os.Exit(2)
+		}
+		*token = strings.TrimSpace(string(body))
+	}
 
 	if strings.TrimSpace(*token) == "" || strings.TrimSpace(*agentID) == "" {
 		slog.Error("agent token and id are required")

@@ -47,6 +47,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if err := app.EnableAuthentication(); err != nil {
+		slog.Error("login configuration invalid", "error", err)
+		os.Exit(2)
+	}
 	server := &http.Server{
 		Addr:              *listen,
 		Handler:           app.Handler(),

@@ -64,6 +64,10 @@ func (s *Server) handleDiskUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := map[string]bool{}
+	if !s.authorizedFor(r, snap.AgentID) {
+		writeJSON(w, 401, map[string]string{"error": "credential does not belong to this agent"})
+		return
+	}
 	for _, n := range snap.Nodes {
 		if n.Bytes < 0 || n.Path == "" || seen[n.Path] {
 			writeJSON(w, 400, map[string]string{"error": "invalid directory nodes"})

@@ -16,10 +16,11 @@ import (
 	"github.com/seesize/seesize/internal/model"
 )
 
-//go:embed web/index.html
+//go:embed web/*.html
 var webFiles embed.FS
 
 type Server struct {
+	auth            *authState
 	adminToken      string
 	token           string
 	store           MetricStore
@@ -28,9 +29,6 @@ type Server struct {
 }
 
 func NewServer(token string, store MetricStore) (*Server, error) {
-	if strings.TrimSpace(token) == "" {
-		return nil, errors.New("agent token must not be empty")
-	}
 	if store == nil {
 		return nil, errors.New("store must not be nil")
 	}
@@ -47,6 +45,13 @@ func (s *Server) SetGrowthThreshold(bytes int64) error {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /login", s.handleLoginPage)
+	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/v1/devices", s.handleDevices)
+	mux.HandleFunc("POST /api/v1/enrollments", s.handleEnrollment)
+	mux.HandleFunc("POST /api/v1/devices/{agentID}/revoke", s.handleRevoke)
+	mux.HandleFunc("POST /api/v1/agents/register", s.handleRegister)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /api/v1/agents/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("GET /api/v1/servers", s.handleServers)
@@ -57,7 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/servers/{agentID}/metrics", s.handleHistory)
 	mux.HandleFunc("GET /api/v1/servers/{agentID}/trend", s.handleTrend)
 	mux.HandleFunc("GET /", s.handleIndex)
-	return securityHeaders(mux)
+	return securityHeaders(s.protect(mux))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -91,6 +96,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if heartbeat.CollectedAt.IsZero() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "collected_at is required"})
+		return
+	}
+	if !s.authorizedFor(r, heartbeat.AgentID) {
+		writeJSON(w, 401, map[string]string{"error": "credential does not belong to this agent"})
 		return
 	}
 
@@ -179,6 +188,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorized(r *http.Request) bool {
+	return s.authorizedFor(r, "")
+}
+func (s *Server) authorizedLegacy(r *http.Request) bool {
 	const prefix = "Bearer "
 	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, prefix) {
