@@ -71,7 +71,15 @@ func (s *Server) handleDiskUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[n.Path] = true
 	}
-	if err := store.SaveDisk(r.Context(), snap); err != nil {
+	var saveErr error
+	if events, ok := store.(interface {
+		SaveDiskEvents(context.Context, disk.Snapshot, int64) error
+	}); ok {
+		saveErr = events.SaveDiskEvents(r.Context(), snap, s.growthThreshold)
+	} else {
+		saveErr = store.SaveDisk(r.Context(), snap)
+	}
+	if saveErr != nil {
 		writeJSON(w, 500, map[string]string{"error": "unable to save snapshot"})
 		return
 	}

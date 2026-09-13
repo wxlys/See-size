@@ -42,6 +42,10 @@ func main() {
 		slog.Error("invalid growth threshold", "error", err)
 		os.Exit(2)
 	}
+	if err := app.SetAdminToken(os.Getenv("SEE_SIZE_ADMIN_TOKEN")); err != nil {
+		slog.Error("invalid management credential", "error", err)
+		os.Exit(2)
+	}
 
 	server := &http.Server{
 		Addr:              *listen,
@@ -59,8 +63,8 @@ func main() {
 		store.RunRetention(ctx, time.Duration(*retentionDays)*24*time.Hour, *cleanupInterval, func(result hub.CleanupResult, err error) {
 			if err != nil && ctx.Err() == nil {
 				slog.Warn("history cleanup incomplete", "error", err, "metrics_deleted", result.Metrics, "snapshots_deleted", result.Snapshots)
-			} else if result.Metrics+result.Snapshots > 0 {
-				slog.Info("expired history removed", "metrics_deleted", result.Metrics, "snapshots_deleted", result.Snapshots)
+			} else if result.Metrics+result.Snapshots+result.Events > 0 {
+				slog.Info("expired history removed", "metrics_deleted", result.Metrics, "snapshots_deleted", result.Snapshots, "events_deleted", result.Events)
 			}
 		})
 	}()

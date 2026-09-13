@@ -71,6 +71,21 @@
     let refreshing = false;
     const diskExpanded = new Set();
     const cards = new Map();
+    const eventExpanded=new Set();
+    async function loadEvents(id,before=''){
+      const card=cards.get(id);if(!card)return;
+      const panel=card.querySelector('[data-events]'),list=panel.querySelector('.event-list');
+      const sequence=Number(panel.dataset.sequence||0)+1;panel.dataset.sequence=sequence;panel.dataset.before=before;
+      try{
+        const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/events${before?'?before='+encodeURIComponent(before):''}`);
+        if(!res.ok)throw new Error(`HTTP ${res.status}`);
+        const data=await res.json();if(Number(panel.dataset.sequence)!==sequence)return;
+        const html=data.events.length?data.events.map(e=>`<article class="metric" style="margin-top:10px"><span class="pill ${e.acknowledged_at?'online':'offline'}">${e.acknowledged_at?'已处理':'待处理'}</span><p>${esc(e.root)} / ${esc(e.path)} · +${fmtBytes(e.delta)}</p><p class="label">${esc(new Date(e.from).toLocaleString())} — ${esc(new Date(e.to).toLocaleString())} · 触发阈值 ${fmtBytes(e.threshold)}</p>${e.acknowledged_at?`<p class="label">处理时间 ${esc(new Date(e.acknowledged_at).toLocaleString())}</p>`:`<button data-ack="${e.id}" ${data.ack_enabled?'':'disabled'}>标记已处理</button>`}</article>`).join(''):'<p class="label">暂无告警事件；功能启用后的新增增长会记录在这里。</p>';
+        if(list.innerHTML!==html)list.innerHTML=html;
+        panel.querySelector('.event-note').textContent=data.ack_enabled?'处理操作需要管理凭据；已处理仅表示人工确认，不代表磁盘已恢复。':'服务端尚未配置管理凭据，目前只读。';
+        const next=panel.querySelector('[data-event-next]');next.disabled=!data.next_cursor;next.dataset.cursor=data.next_cursor||'';
+      }catch(e){panel.querySelector('.event-note').textContent=`读取失败：${e.message}`;}
+    }
     async function loadDisk(id){
       const panel=document.querySelector(`[data-disk="${CSS.escape(encodeURIComponent(id))}"]`);
       if(!panel)return;
@@ -140,6 +155,17 @@
     }
 
     function bindHistoryButtons(root){
+      const id=decodeURIComponent(root.querySelector('[data-history-toggle]').dataset.historyToggle);
+      root.querySelector('[data-event-toggle]').addEventListener('click',()=>{const panel=root.querySelector('[data-events]');panel.hidden=!panel.hidden;if(panel.hidden)eventExpanded.delete(id);else{eventExpanded.add(id);loadEvents(id);}});
+      root.querySelector('[data-event-next]').addEventListener('click',e=>loadEvents(id,e.currentTarget.dataset.cursor));
+      root.querySelector('[data-event-first]').addEventListener('click',()=>loadEvents(id));
+      root.querySelector('.event-list').addEventListener('click',async e=>{
+        const button=e.target.closest('[data-ack]');if(!button)return;
+        const panel=root.querySelector('[data-events]'),input=panel.querySelector('input');
+        if(!input.value){panel.querySelector('.event-note').textContent='请填写独立管理凭据。';input.focus();return;}
+        const token=input.value;input.value='';button.disabled=true;
+        try{const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/events/${button.dataset.ack}/ack`,{method:'POST',headers:{Authorization:'Bearer '+token}});if(!res.ok)throw new Error(`HTTP ${res.status}`);await loadEvents(id,panel.dataset.before||'');}catch(err){panel.querySelector('.event-note').textContent=`处理失败：${err.message}`;button.disabled=false;}
+      });
       root.querySelector('select').addEventListener('change',()=>loadHistory(decodeURIComponent(root.querySelector('[data-history-toggle]').dataset.historyToggle)));
       root.querySelectorAll('.chart').forEach(chart=>{const axis=document.createElement('div');axis.className='time-axis label';chart.append(axis);});
       root.querySelectorAll('[data-disk-toggle]').forEach(button=>button.addEventListener('click',()=>{
@@ -196,6 +222,8 @@
             </div>
             <div class="actions"><button type="button" data-history-toggle="${key}">${isExpanded?'收起历史':'查看历史'}</button></div>
             <div class="actions"><button type="button" data-disk-toggle="${key}">目录空间分析</button></div>
+            <div class="actions"><button type="button" data-event-toggle>告警历史</button></div>
+            <section class="history" data-events hidden><h3>目录增长事件</h3><p class="label">父子目录增量重叠，不能相加。事件按历史保留期限清理。</p><label class="label">管理凭据 <input type="password" autocomplete="off" aria-label="管理凭据"></label><p class="event-note label"></p><div class="event-list"></div><div class="actions"><button data-event-first>最新事件</button><button data-event-next disabled>更早事件</button></div></section>
             <section class="history" data-disk="${key}" ${diskExpanded.has(s.agent_id)?'':'hidden'}>正在读取目录快照</section>
             <section class="history" data-history="${key}" ${isExpanded?'':'hidden'}>
               <div class="history-head"><h3>资源趋势</h3><select aria-label="趋势时间范围"><option value="30m">最近 30 分钟</option><option value="1h" selected>最近 1 小时</option><option value="24h">最近 24 小时</option></select></div>
@@ -213,6 +241,7 @@
         if(!servers.length && !container.querySelector('.empty'))container.innerHTML='<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
         expanded.forEach(loadHistory);
         diskExpanded.forEach(loadDisk);
+        eventExpanded.forEach(id=>{const panel=cards.get(id)?.querySelector('[data-events]');if(panel && !panel.dataset.before)loadEvents(id);});
       } catch(error){ document.querySelector('#updated').textContent=`读取失败 ${error.message}`; }
       finally { refreshing=false; }
     }

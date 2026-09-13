@@ -45,6 +45,9 @@ func OpenSQLite(path string, offlineAfter time.Duration) (*SQLiteStore, error) {
 
 func (s *SQLiteStore) initialize(ctx context.Context) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS disk_events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, delta INTEGER NOT NULL, threshold INTEGER NOT NULL, from_ns INTEGER NOT NULL, to_ns INTEGER NOT NULL, ack_ns INTEGER, UNIQUE(agent_id,root,path,to_ns))`,
+		`CREATE INDEX IF NOT EXISTS idx_disk_events_agent ON disk_events(agent_id,id)`,
+		`CREATE INDEX IF NOT EXISTS idx_disk_events_time ON disk_events(to_ns)`,
 		`CREATE TABLE IF NOT EXISTS disk_snapshots (agent_id TEXT NOT NULL, root TEXT NOT NULL, at_ns INTEGER NOT NULL, snapshot_json BLOB NOT NULL, PRIMARY KEY(agent_id,root,at_ns))`,
 		`CREATE INDEX IF NOT EXISTS idx_disk_snapshots_time ON disk_snapshots(at_ns)`,
 		`PRAGMA journal_mode = WAL`,

@@ -7,6 +7,7 @@ import (
 )
 
 type CleanupResult struct {
+	Events    int64 `json:"events_deleted"`
 	Metrics   int64 `json:"metrics_deleted"`
 	Snapshots int64 `json:"snapshots_deleted"`
 }
@@ -40,6 +41,14 @@ func (s *SQLiteStore) CleanupBatch(ctx context.Context, now time.Time, retention
 	if err != nil {
 		return CleanupResult{}, err
 	}
+	res, err = tx.ExecContext(ctx, `DELETE FROM disk_events WHERE id IN (SELECT id FROM disk_events WHERE to_ns < ? ORDER BY to_ns LIMIT ?)`, cutoff, batch)
+	if err != nil {
+		return CleanupResult{}, err
+	}
+	result.Events, err = res.RowsAffected()
+	if err != nil {
+		return CleanupResult{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return CleanupResult{}, err
 	}
@@ -61,7 +70,8 @@ func (s *SQLiteStore) RunRetention(ctx context.Context, retention, interval time
 			batch, err := s.CleanupBatch(work, time.Now().UTC(), retention, 1000)
 			total.Metrics += batch.Metrics
 			total.Snapshots += batch.Snapshots
-			if err != nil || (batch.Metrics < 1000 && batch.Snapshots < 1000) {
+			total.Events += batch.Events
+			if err != nil || (batch.Metrics < 1000 && batch.Snapshots < 1000 && batch.Events < 1000) {
 				report(total, err)
 				return
 			}

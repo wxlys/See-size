@@ -20,6 +20,7 @@ import (
 var webFiles embed.FS
 
 type Server struct {
+	adminToken      string
 	token           string
 	store           MetricStore
 	now             func() time.Time
@@ -49,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("POST /api/v1/agents/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("GET /api/v1/servers", s.handleServers)
+	mux.HandleFunc("GET /api/v1/servers/{agentID}/events", s.handleEvents)
+	mux.HandleFunc("POST /api/v1/servers/{agentID}/events/{eventID}/ack", s.handleAck)
 	mux.HandleFunc("POST /api/v1/agents/disk-snapshots", s.handleDiskUpload)
 	mux.HandleFunc("GET /api/v1/servers/{agentID}/disk", s.handleDisk)
 	mux.HandleFunc("GET /api/v1/servers/{agentID}/metrics", s.handleHistory)
