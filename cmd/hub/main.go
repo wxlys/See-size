@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/seesize/seesize/internal/hub"
@@ -15,7 +18,13 @@ func main() {
 	token := flag.String("agent-token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "temporary shared Agent token")
 	offlineAfter := flag.Duration("offline-after", 35*time.Second, "time without heartbeat before a server is offline")
 	dataPath := flag.String("data", ".data/seesize.db", "SQLite database path")
+	retentionDays := flag.Int("retention-days", 7, "days to retain metrics and disk snapshots (1..365)")
+	cleanupInterval := flag.Duration("cleanup-interval", 10*time.Minute, "expired data cleanup interval (1s..24h)")
 	flag.Parse()
+	if *retentionDays < 1 || *retentionDays > 365 || *cleanupInterval < time.Second || *cleanupInterval > 24*time.Hour {
+		slog.Error("retention days must be 1..365 and cleanup interval 1s..24h")
+		os.Exit(2)
+	}
 
 	store, err := hub.OpenSQLite(*dataPath, *offlineAfter)
 	if err != nil {
@@ -37,9 +46,40 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		store.RunRetention(ctx, time.Duration(*retentionDays)*24*time.Hour, *cleanupInterval, func(result hub.CleanupResult, err error) {
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("history cleanup incomplete", "error", err, "metrics_deleted", result.Metrics, "snapshots_deleted", result.Snapshots)
+			} else if result.Metrics+result.Snapshots > 0 {
+				slog.Info("expired history removed", "metrics_deleted", result.Metrics, "snapshots_deleted", result.Snapshots)
+			}
+		})
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdown); err != nil {
+			slog.Warn("HTTP shutdown", "error", err)
+		}
+	}()
+	slog.Info("history retention enabled", "days", *retentionDays, "cleanup_interval", *cleanupInterval)
 	slog.Info("SeeSize hub listening", "address", *listen)
+	failed := false
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("hub stopped", "error", err)
+		failed = true
+	}
+	stop()
+	<-cleanupDone
+	<-shutdownDone
+	if failed {
 		os.Exit(1)
 	}
 }
