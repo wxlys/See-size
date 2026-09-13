@@ -20,9 +20,10 @@ import (
 var webFiles embed.FS
 
 type Server struct {
-	token string
-	store MetricStore
-	now   func() time.Time
+	token           string
+	store           MetricStore
+	now             func() time.Time
+	growthThreshold int64
 }
 
 func NewServer(token string, store MetricStore) (*Server, error) {
@@ -32,7 +33,15 @@ func NewServer(token string, store MetricStore) (*Server, error) {
 	if store == nil {
 		return nil, errors.New("store must not be nil")
 	}
-	return &Server{token: token, store: store, now: time.Now}, nil
+	return &Server{token: token, store: store, now: time.Now, growthThreshold: 100 << 20}, nil
+}
+
+func (s *Server) SetGrowthThreshold(bytes int64) error {
+	if bytes <= 0 {
+		return errors.New("growth threshold must be positive")
+	}
+	s.growthThreshold = bytes
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {

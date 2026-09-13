@@ -78,7 +78,9 @@
         const data=await res.json(), snap=data.snapshots[0];
         if(!snap){panel.textContent='暂无目录快照。请在该服务器上手动运行目录扫描。';return;}
         const deltas=new Map(data.changes.map(c=>[c.path,c.delta]));
+        const warnings=(data.alerts||[]).slice(0,20).map(a=>`<p style="color:#f6b86a">空间增长提示：${esc(a.path)} +${fmtBytes(a.delta)}<br><span class="label">${esc(new Date(a.from).toLocaleString())} 至 ${esc(new Date(a.to).toLocaleString())}</span></p>`).join('');
         panel.innerHTML=`<h3>目录空间分析</h3><p class="label">${esc(snap.root)} · ${esc(new Date(snap.at).toLocaleString())} · ${snap.complete?'扫描完整':'结果不完整（存在跳过项或达到扫描限制）'}</p><p class="label">逻辑文件大小；父目录包含子目录，不能相加。${data.comparable?'增量对比上一次完整扫描。':'暂无可比较的两次完整扫描。'}</p>`+
+          `<p class="label">增长提示阈值：每次比较 ${fmtBytes(data.growth_threshold_bytes)}。提示仅反映两次扫描间净增量，不代表瞬时峰值或已确定原因。</p>`+warnings+
           snap.nodes.slice(0,500).map(n=>`<div style="display:flex;justify-content:space-between;padding:6px 0 6px ${Math.min(n.path.split('/').length,6)*14}px"><span>${esc(n.path)}</span><span>${fmtBytes(n.bytes)}${data.comparable?' · '+((deltas.get(n.path)||0)>=0?'+':'−')+fmtBytes(Math.abs(deltas.get(n.path)||0)):''}</span></div>`).join('')+
           (snap.nodes.length>500?'<p>仅展示前 500 个目录，完整结果保存在快照中。</p>':'');
       }catch(e){panel.textContent=`目录分析读取失败：${e.message}`;}

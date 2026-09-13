@@ -41,16 +41,23 @@ func TestDiskUploadPersistenceAndComparison(t *testing.T) {
 	}
 	defer store.Close()
 	server, _ = NewServer("secret", store)
+	if err := server.SetGrowthThreshold(50); err != nil {
+		t.Fatal(err)
+	}
 	res := httptest.NewRecorder()
 	server.Handler().ServeHTTP(res, httptest.NewRequest("GET", "/api/v1/servers/test/disk", nil))
 	var result struct {
-		Comparable bool          `json:"comparable"`
-		Changes    []disk.Change `json:"changes"`
+		Comparable bool               `json:"comparable"`
+		Changes    []disk.Change      `json:"changes"`
+		Alerts     []disk.GrowthAlert `json:"alerts"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
 	if !result.Comparable || len(result.Changes) != 1 || result.Changes[0].Delta != 50 {
 		t.Fatalf("bad comparison: %+v", result)
+	}
+	if len(result.Alerts) != 1 || result.Alerts[0].Delta != 50 {
+		t.Fatalf("bad growth alert: %+v", result.Alerts)
 	}
 }

@@ -90,8 +90,10 @@ func (s *Server) handleDisk(w http.ResponseWriter, r *http.Request) {
 	}
 	changes := []disk.Change{}
 	comparable := false
+	alerts := []disk.GrowthAlert{}
 	if len(snapshots) == 2 {
 		changes, comparable = disk.Compare(snapshots[1], snapshots[0])
+		alerts = disk.GrowthAlerts(snapshots[1], snapshots[0], s.growthThreshold)
 	}
-	writeJSON(w, 200, map[string]any{"snapshots": snapshots, "comparable": comparable, "changes": changes})
+	writeJSON(w, 200, map[string]any{"snapshots": snapshots, "comparable": comparable, "changes": changes, "alerts": alerts, "growth_threshold_bytes": s.growthThreshold})
 }
