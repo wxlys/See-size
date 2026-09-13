@@ -4,7 +4,7 @@ SeeSize 是一个面向个人开发者和小型服务器集群的轻量资源监
 
 当前仓库包含第一个纵向原型：
 
-- `seesize-hub`：接收 Agent 心跳并提供内嵌 Web 总览。
+- `seesize-hub`：接收 Agent 心跳，持久化历史指标，并提供内嵌 Web 总览与趋势图。
 - `seesize-agent`：采集主机信息和基础资源指标并主动上报。
 - `internal/model`：Hub 与 Agent 共用的协议模型。
 - `internal/collector`：Linux 指标采集及其他平台的开发占位实现。

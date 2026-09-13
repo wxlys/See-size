@@ -29,8 +29,19 @@
     .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:18px; }
     .metric { background:#10182c; border-radius:12px; padding:13px; }
     .metric strong { display:block; margin-top:5px; font-size:17px; }
+    .actions { display:flex; justify-content:flex-end; margin-top:14px; }
+    button { color:#cfe0ff; background:#172544; border:1px solid #385487; border-radius:9px; padding:8px 12px; cursor:pointer; }
+    button:hover { background:#20345e; }
+    .history { margin-top:16px; padding-top:16px; border-top:1px solid #2a3b65; }
+    .history-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .history-head h3 { margin:0; font-size:15px; }
+    .charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .chart { background:#0e1629; border-radius:12px; padding:12px; min-width:0; }
+    .chart-title { color:#9fb1d3; font-size:12px; margin-bottom:7px; display:flex; justify-content:space-between; }
+    canvas { width:100%; height:112px; display:block; }
     .empty { color:#92a4c5; text-align:center; padding:56px 20px; border:1px dashed #34466f; border-radius:16px; }
-    @media(max-width:760px){header{align-items:start;flex-direction:column}.summary{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:760px){header{align-items:start;flex-direction:column}.summary{grid-template-columns:1fr}.metrics,.charts{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:520px){.metrics,.charts{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -55,7 +66,63 @@
     };
     const pct = (used,total) => total ? `${(used*100/total).toFixed(1)}%` : '暂无';
     const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const expanded = new Set();
+    let refreshing = false;
+
+    function drawLines(canvas, samples, series, ceiling){
+      const ratio=window.devicePixelRatio||1;
+      const width=Math.max(canvas.clientWidth,220), height=112;
+      canvas.width=width*ratio; canvas.height=height*ratio;
+      const ctx=canvas.getContext('2d'); ctx.scale(ratio,ratio);
+      ctx.clearRect(0,0,width,height);
+      ctx.strokeStyle='#263858'; ctx.lineWidth=1;
+      for(let i=1;i<4;i++){const y=Math.round(height*i/4)+.5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke()}
+      const values=series.flatMap(item=>samples.map(item.value)).filter(Number.isFinite);
+      const max=Math.max(ceiling||0,...values,1), min=0;
+      for(const item of series){
+        ctx.strokeStyle=item.color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.beginPath();
+        samples.forEach((sample,index)=>{
+          const value=item.value(sample); const x=samples.length<2?width/2:index*width/(samples.length-1);
+          const y=height-5-(Math.max(min,Math.min(max,value))-min)*(height-10)/(max-min||1);
+          index?ctx.lineTo(x,y):ctx.moveTo(x,y);
+        });
+        ctx.stroke();
+      }
+    }
+
+    async function loadHistory(agentID){
+      const key=encodeURIComponent(agentID); const panel=document.querySelector(`[data-history="${CSS.escape(key)}"]`);
+      if(!panel) return;
+      try{
+        const response=await fetch(`/api/v1/servers/${key}/metrics`,{cache:'no-store'});
+        if(!response.ok) throw new Error(`HTTP ${response.status}`);
+        const {samples}=await response.json();
+        panel.querySelector('.history-note').textContent=samples.length?`最近一小时 · ${samples.length} 个采样点`:'最近一小时暂无样本';
+        if(!samples.length) return;
+        const memory=s=>s.metrics.memory.total_bytes?s.metrics.memory.used_bytes*100/s.metrics.memory.total_bytes:0;
+        const disk=s=>s.metrics.root_disk.total_bytes?s.metrics.root_disk.used_bytes*100/s.metrics.root_disk.total_bytes:0;
+        drawLines(panel.querySelector('[data-chart="cpu"]'),samples,[{value:s=>s.metrics.cpu_percent,color:'#65d6ad'}],100);
+        drawLines(panel.querySelector('[data-chart="memory"]'),samples,[{value:memory,color:'#7ea7ff'}],100);
+        drawLines(panel.querySelector('[data-chart="network"]'),samples,[
+          {value:s=>s.metrics.network.received_bytes_per_second,color:'#64d8ff'},
+          {value:s=>s.metrics.network.sent_bytes_per_second,color:'#f6b86a'}
+        ]);
+        drawLines(panel.querySelector('[data-chart="disk"]'),samples,[{value:disk,color:'#c78cff'}],100);
+      }catch(error){ panel.querySelector('.history-note').textContent=`历史读取失败：${error.message}`; }
+    }
+
+    function bindHistoryButtons(){
+      document.querySelectorAll('[data-history-toggle]').forEach(button=>button.addEventListener('click',()=>{
+        const id=decodeURIComponent(button.dataset.historyToggle);
+        expanded.has(id)?expanded.delete(id):expanded.add(id);
+        const panel=document.querySelector(`[data-history="${CSS.escape(encodeURIComponent(id))}"]`);
+        panel.hidden=!expanded.has(id); button.textContent=expanded.has(id)?'收起历史':'查看历史';
+        if(expanded.has(id)) loadHistory(id);
+      }));
+    }
+
     async function refresh(){
+      if(refreshing) return; refreshing=true;
       try {
         const response=await fetch('/api/v1/servers',{cache:'no-store'});
         if(!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -66,7 +133,9 @@
         document.querySelector('#online').textContent=online;
         document.querySelector('#attention').textContent=attention;
         document.querySelector('#updated').textContent=`更新时间 ${new Date().toLocaleTimeString()}`;
-        document.querySelector('#servers').innerHTML=servers.length ? servers.map(s=>`
+        document.querySelector('#servers').innerHTML=servers.length ? servers.map(s=>{
+          const key=esc(encodeURIComponent(s.agent_id)); const isExpanded=expanded.has(s.agent_id);
+          return `
           <article class="server">
             <div class="server-head"><div><h2>${esc(s.hostname)}</h2><div class="meta">${esc(s.distribution || s.os)} ${esc(s.system_version)} · ${esc(s.architecture)} · ${esc(s.observed_ip)}</div></div><span class="pill ${s.online?'online':'offline'}">${s.online?'在线':'离线'}</span></div>
             <div class="metrics">
@@ -75,11 +144,22 @@
               <div class="metric"><div class="label">根磁盘</div><strong>${pct(s.metrics?.root_disk?.used_bytes,s.metrics?.root_disk?.total_bytes)}</strong></div>
               <div class="metric"><div class="label">网络下行</div><strong>${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s</strong></div>
             </div>
-          </article>`).join('') : '<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
+            <div class="actions"><button type="button" data-history-toggle="${key}">${isExpanded?'收起历史':'查看历史'}</button></div>
+            <section class="history" data-history="${key}" ${isExpanded?'':'hidden'}>
+              <div class="history-head"><h3>资源趋势</h3><span class="history-note label">正在读取历史</span></div>
+              <div class="charts">
+                <div class="chart"><div class="chart-title"><span>CPU</span><span>%</span></div><canvas data-chart="cpu"></canvas></div>
+                <div class="chart"><div class="chart-title"><span>内存</span><span>%</span></div><canvas data-chart="memory"></canvas></div>
+                <div class="chart"><div class="chart-title"><span>网络</span><span>下载 / 上传</span></div><canvas data-chart="network"></canvas></div>
+                <div class="chart"><div class="chart-title"><span>根磁盘</span><span>%</span></div><canvas data-chart="disk"></canvas></div>
+              </div>
+            </section>
+          </article>`}).join('') : '<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
+        bindHistoryButtons(); expanded.forEach(loadHistory);
       } catch(error){ document.querySelector('#updated').textContent=`读取失败 ${error.message}`; }
+      finally { refreshing=false; }
     }
     refresh(); setInterval(refresh,5000);
   </script>
 </body>
 </html>
-
