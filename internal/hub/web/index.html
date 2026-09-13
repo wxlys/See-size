@@ -69,21 +69,29 @@
     const expanded = new Set();
     let refreshing = false;
     const diskExpanded = new Set();
+    const cards = new Map();
     async function loadDisk(id){
       const panel=document.querySelector(`[data-disk="${CSS.escape(encodeURIComponent(id))}"]`);
       if(!panel)return;
+      if(panel.dataset.loading)return;
+      panel.dataset.loading='true';
       try{
         const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/disk`);
         if(!res.ok)throw new Error(`HTTP ${res.status}`);
         const data=await res.json(), snap=data.snapshots[0];
+        const signature=JSON.stringify(data);
+        if(panel.dataset.signature===signature)return;
         if(!snap){panel.textContent='暂无目录快照。请在该服务器上手动运行目录扫描。';return;}
         const deltas=new Map(data.changes.map(c=>[c.path,c.delta]));
         const warnings=(data.alerts||[]).slice(0,20).map(a=>`<p style="color:#f6b86a">空间增长提示：${esc(a.path)} +${fmtBytes(a.delta)}<br><span class="label">${esc(new Date(a.from).toLocaleString())} 至 ${esc(new Date(a.to).toLocaleString())}</span></p>`).join('');
-        panel.innerHTML=`<h3>目录空间分析</h3><p class="label">${esc(snap.root)} · ${esc(new Date(snap.at).toLocaleString())} · ${snap.complete?'扫描完整':'结果不完整（存在跳过项或达到扫描限制）'}</p><p class="label">逻辑文件大小；父目录包含子目录，不能相加。${data.comparable?'增量对比上一次完整扫描。':'暂无可比较的两次完整扫描。'}</p>`+
+        panel.innerHTML=`<h3>目录空间分析</h3><p><span class="pill ${snap.complete?'online':'offline'}">${snap.complete?'扫描完整':'扫描不完整'}</span></p><p class="label">扫描条目：${Number(snap.entries)||0} · 跳过条目：${Number(snap.skipped)||0}${snap.complete?'':' · 存在跳过项或达到扫描限制，暂停增量判断'}</p><p class="label">${esc(snap.root)} · ${esc(new Date(snap.at).toLocaleString())}</p><p class="label">逻辑文件大小；父目录包含子目录，不能相加。${data.comparable?'增量对比上一次完整扫描。':'暂无可比较的两次完整扫描。'}</p>`+
           `<p class="label">增长提示阈值：每次比较 ${fmtBytes(data.growth_threshold_bytes)}。提示仅反映两次扫描间净增量，不代表瞬时峰值或已确定原因。</p>`+warnings+
           snap.nodes.slice(0,500).map(n=>`<div style="display:flex;justify-content:space-between;padding:6px 0 6px ${Math.min(n.path.split('/').length,6)*14}px"><span>${esc(n.path)}</span><span>${fmtBytes(n.bytes)}${data.comparable?' · '+((deltas.get(n.path)||0)>=0?'+':'−')+fmtBytes(Math.abs(deltas.get(n.path)||0)):''}</span></div>`).join('')+
           (snap.nodes.length>500?'<p>仅展示前 500 个目录，完整结果保存在快照中。</p>':'');
-      }catch(e){panel.textContent=`目录分析读取失败：${e.message}`;}
+        panel.dataset.signature=signature;
+        panel.removeAttribute('title');
+      }catch(e){if(!panel.dataset.signature)panel.textContent=`目录分析读取失败：${e.message}`;else panel.title=`更新失败，保留上次结果：${e.message}`;}
+      finally{delete panel.dataset.loading;}
     }
 
     function drawLines(canvas, samples, series, ceiling){
@@ -110,11 +118,13 @@
     async function loadHistory(agentID){
       const key=encodeURIComponent(agentID); const panel=document.querySelector(`[data-history="${CSS.escape(key)}"]`);
       if(!panel) return;
+      if(panel.dataset.loading)return;
+      panel.dataset.loading='true';
       try{
         const response=await fetch(`/api/v1/servers/${key}/metrics`,{cache:'no-store'});
         if(!response.ok) throw new Error(`HTTP ${response.status}`);
         const {samples}=await response.json();
-        panel.querySelector('.history-note').textContent=samples.length?`最近一小时 · ${samples.length} 个采样点`:'最近一小时暂无样本';
+        panel.querySelector('.history-note').textContent=samples.length?`最近一小时内的最新 ${samples.length} 个采样点（单次上限 1000） · ${new Date(samples[0].collected_at).toLocaleTimeString()} — ${new Date(samples[samples.length-1].collected_at).toLocaleTimeString()}`:'最近一小时暂无样本';
         if(!samples.length) return;
         const memory=s=>s.metrics.memory.total_bytes?s.metrics.memory.used_bytes*100/s.metrics.memory.total_bytes:0;
         const disk=s=>s.metrics.root_disk.total_bytes?s.metrics.root_disk.used_bytes*100/s.metrics.root_disk.total_bytes:0;
@@ -126,16 +136,17 @@
         ]);
         drawLines(panel.querySelector('[data-chart="disk"]'),samples,[{value:disk,color:'#c78cff'}],100);
       }catch(error){ panel.querySelector('.history-note').textContent=`历史读取失败：${error.message}`; }
+      finally{delete panel.dataset.loading;}
     }
 
-    function bindHistoryButtons(){
-      document.querySelectorAll('[data-disk-toggle]').forEach(button=>button.addEventListener('click',()=>{
+    function bindHistoryButtons(root){
+      root.querySelectorAll('[data-disk-toggle]').forEach(button=>button.addEventListener('click',()=>{
         const key=button.dataset.diskToggle,id=decodeURIComponent(key);
         diskExpanded.has(id)?diskExpanded.delete(id):diskExpanded.add(id);
         const panel=document.querySelector(`[data-disk="${CSS.escape(key)}"]`);panel.hidden=!diskExpanded.has(id);
         if(!panel.hidden)loadDisk(id);
       }));
-      document.querySelectorAll('[data-history-toggle]').forEach(button=>button.addEventListener('click',()=>{
+      root.querySelectorAll('[data-history-toggle]').forEach(button=>button.addEventListener('click',()=>{
         const id=decodeURIComponent(button.dataset.historyToggle);
         expanded.has(id)?expanded.delete(id):expanded.add(id);
         const panel=document.querySelector(`[data-history="${CSS.escape(encodeURIComponent(id))}"]`);
@@ -156,9 +167,23 @@
         document.querySelector('#online').textContent=online;
         document.querySelector('#attention').textContent=attention;
         document.querySelector('#updated').textContent=`更新时间 ${new Date().toLocaleTimeString()}`;
-        document.querySelector('#servers').innerHTML=servers.length ? servers.map(s=>{
+        const container=document.querySelector('#servers');
+        const ids=new Set(servers.map(s=>s.agent_id));
+        for(const [id,card] of cards){if(!ids.has(id)){card.remove();cards.delete(id);expanded.delete(id);diskExpanded.delete(id);}}
+        if(servers.length)container.querySelector('.empty')?.remove();
+        for(const s of servers){
+          if(cards.has(s.agent_id)){
+            const card=cards.get(s.agent_id);
+            card.querySelector('h2').textContent=s.hostname;
+            card.querySelector('.meta').textContent=`${s.distribution||s.os} ${s.system_version} · ${s.architecture} · ${s.observed_ip}`;
+            const badge=card.querySelector('.server-head .pill');badge.className=`pill ${s.online?'online':'offline'}`;badge.textContent=s.online?'在线':'离线';
+            const values=[`${Number(s.metrics?.cpu_percent||0).toFixed(1)}%`,pct(s.metrics?.memory?.used_bytes,s.metrics?.memory?.total_bytes),pct(s.metrics?.root_disk?.used_bytes,s.metrics?.root_disk?.total_bytes),`${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s`];
+            card.querySelectorAll('.metrics strong').forEach((node,i)=>{node.textContent=values[i];});
+            continue;
+          }
           const key=esc(encodeURIComponent(s.agent_id)); const isExpanded=expanded.has(s.agent_id);
-          return `
+          const template=document.createElement('template');
+          template.innerHTML=`
           <article class="server">
             <div class="server-head"><div><h2>${esc(s.hostname)}</h2><div class="meta">${esc(s.distribution || s.os)} ${esc(s.system_version)} · ${esc(s.architecture)} · ${esc(s.observed_ip)}</div></div><span class="pill ${s.online?'online':'offline'}">${s.online?'在线':'离线'}</span></div>
             <div class="metrics">
@@ -179,8 +204,11 @@
                 <div class="chart"><div class="chart-title"><span>根磁盘</span><span>%</span></div><canvas data-chart="disk"></canvas></div>
               </div>
             </section>
-          </article>`}).join('') : '<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
-        bindHistoryButtons(); expanded.forEach(loadHistory);
+          </article>`;
+          const card=template.content.firstElementChild;cards.set(s.agent_id,card);container.append(card);bindHistoryButtons(card);
+        }
+        if(!servers.length && !container.querySelector('.empty'))container.innerHTML='<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
+        expanded.forEach(loadHistory);
         diskExpanded.forEach(loadDisk);
       } catch(error){ document.querySelector('#updated').textContent=`读取失败 ${error.message}`; }
       finally { refreshing=false; }
