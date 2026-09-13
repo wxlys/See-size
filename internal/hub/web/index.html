@@ -68,6 +68,21 @@
     const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const expanded = new Set();
     let refreshing = false;
+    const diskExpanded = new Set();
+    async function loadDisk(id){
+      const panel=document.querySelector(`[data-disk="${CSS.escape(encodeURIComponent(id))}"]`);
+      if(!panel)return;
+      try{
+        const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/disk`);
+        if(!res.ok)throw new Error(`HTTP ${res.status}`);
+        const data=await res.json(), snap=data.snapshots[0];
+        if(!snap){panel.textContent='暂无目录快照。请在该服务器上手动运行目录扫描。';return;}
+        const deltas=new Map(data.changes.map(c=>[c.path,c.delta]));
+        panel.innerHTML=`<h3>目录空间分析</h3><p class="label">${esc(snap.root)} · ${esc(new Date(snap.at).toLocaleString())} · ${snap.complete?'扫描完整':'结果不完整（存在跳过项或达到扫描限制）'}</p><p class="label">逻辑文件大小；父目录包含子目录，不能相加。${data.comparable?'增量对比上一次完整扫描。':'暂无可比较的两次完整扫描。'}</p>`+
+          snap.nodes.slice(0,500).map(n=>`<div style="display:flex;justify-content:space-between;padding:6px 0 6px ${Math.min(n.path.split('/').length,6)*14}px"><span>${esc(n.path)}</span><span>${fmtBytes(n.bytes)}${data.comparable?' · '+((deltas.get(n.path)||0)>=0?'+':'−')+fmtBytes(Math.abs(deltas.get(n.path)||0)):''}</span></div>`).join('')+
+          (snap.nodes.length>500?'<p>仅展示前 500 个目录，完整结果保存在快照中。</p>':'');
+      }catch(e){panel.textContent=`目录分析读取失败：${e.message}`;}
+    }
 
     function drawLines(canvas, samples, series, ceiling){
       const ratio=window.devicePixelRatio||1;
@@ -112,6 +127,12 @@
     }
 
     function bindHistoryButtons(){
+      document.querySelectorAll('[data-disk-toggle]').forEach(button=>button.addEventListener('click',()=>{
+        const key=button.dataset.diskToggle,id=decodeURIComponent(key);
+        diskExpanded.has(id)?diskExpanded.delete(id):diskExpanded.add(id);
+        const panel=document.querySelector(`[data-disk="${CSS.escape(key)}"]`);panel.hidden=!diskExpanded.has(id);
+        if(!panel.hidden)loadDisk(id);
+      }));
       document.querySelectorAll('[data-history-toggle]').forEach(button=>button.addEventListener('click',()=>{
         const id=decodeURIComponent(button.dataset.historyToggle);
         expanded.has(id)?expanded.delete(id):expanded.add(id);
@@ -145,6 +166,8 @@
               <div class="metric"><div class="label">网络下行</div><strong>${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s</strong></div>
             </div>
             <div class="actions"><button type="button" data-history-toggle="${key}">${isExpanded?'收起历史':'查看历史'}</button></div>
+            <div class="actions"><button type="button" data-disk-toggle="${key}">目录空间分析</button></div>
+            <section class="history" data-disk="${key}" ${diskExpanded.has(s.agent_id)?'':'hidden'}>正在读取目录快照</section>
             <section class="history" data-history="${key}" ${isExpanded?'':'hidden'}>
               <div class="history-head"><h3>资源趋势</h3><span class="history-note label">正在读取历史</span></div>
               <div class="charts">
@@ -156,6 +179,7 @@
             </section>
           </article>`}).join('') : '<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
         bindHistoryButtons(); expanded.forEach(loadHistory);
+        diskExpanded.forEach(loadDisk);
       } catch(error){ document.querySelector('#updated').textContent=`读取失败 ${error.message}`; }
       finally { refreshing=false; }
     }

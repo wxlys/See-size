@@ -45,6 +45,7 @@ func OpenSQLite(path string, offlineAfter time.Duration) (*SQLiteStore, error) {
 
 func (s *SQLiteStore) initialize(ctx context.Context) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS disk_snapshots (agent_id TEXT NOT NULL, root TEXT NOT NULL, at_ns INTEGER NOT NULL, snapshot_json BLOB NOT NULL, PRIMARY KEY(agent_id,root,at_ns))`,
 		`PRAGMA journal_mode = WAL`,
 		`PRAGMA busy_timeout = 5000`,
 		`PRAGMA foreign_keys = ON`,
