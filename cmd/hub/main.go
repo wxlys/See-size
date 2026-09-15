@@ -18,6 +18,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "address for the hub HTTP server")
 	token := flag.String("agent-token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "temporary shared Agent token")
 	adminFile := flag.String("admin-token-file", "", "read management credential from protected file")
+	secureCookies := flag.Bool("secure-cookies", false, "require HTTPS for session cookies (enable behind a TLS reverse proxy)")
 	offlineAfter := flag.Duration("offline-after", 35*time.Second, "time without heartbeat before a server is offline")
 	dataPath := flag.String("data", ".data/seesize.db", "SQLite database path")
 	retentionDays := flag.Int("retention-days", 7, "days to retain metrics and disk snapshots (1..365)")
@@ -58,6 +59,7 @@ func main() {
 		os.Exit(2)
 	}
 
+	app.SetSecureCookies(*secureCookies)
 	if err := app.EnableAuthentication(); err != nil {
 		slog.Error("login configuration invalid", "error", err)
 		os.Exit(2)

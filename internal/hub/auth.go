@@ -20,6 +20,12 @@ type authState struct {
 	attempts int
 }
 
+// SetSecureCookies must be configured before serving requests. Enable it when
+// HTTPS terminates at a reverse proxy; forwarded headers are not trusted.
+func (s *Server) SetSecureCookies(enabled bool) {
+	s.secureCookies = enabled
+}
+
 func secret() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -119,7 +125,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auth.sessions[digest(token)] = now.Add(8 * time.Hour)
 	s.auth.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "seesize_session", Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 28800})
+	http.SetCookie(w, &http.Cookie{Name: "seesize_session", Value: token, Path: "/", HttpOnly: true, Secure: s.secureCookies || r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 28800})
 	writeJSON(w, 200, map[string]string{"status": "logged in"})
 }
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +136,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			s.auth.mu.Unlock()
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: "seesize_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "seesize_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secureCookies || r.TLS != nil, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, 200, map[string]string{"status": "logged out"})
 }
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {

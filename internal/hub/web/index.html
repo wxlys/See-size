@@ -19,6 +19,18 @@
     .label { color:#93a5c9; font-size:13px; }
     .value { margin-top:7px; font-size:27px; font-weight:700; }
     #servers { display:grid; gap:14px; }
+    [hidden] { display:none !important; }
+    .workspace { display:grid; grid-template-columns:230px minmax(0,1fr); gap:18px; align-items:start; }
+    .sidebar { position:sticky; top:16px; padding:14px; background:#10182c; border:1px solid #2a3b65; border-radius:16px; }
+    .sidebar h2 { font-size:16px; margin:0 0 12px; }
+    #server-nav { display:grid; gap:8px; }
+    .server-choice { text-align:left; width:100%; min-width:0; }
+    .server-choice span { display:block; overflow-wrap:anywhere; }
+    .server-choice[aria-current="true"] { border-color:#79e2ae; background:#203852; }
+    .server-choice .label { margin-top:6px; }
+    #servers,.server-head>div { min-width:0; }
+    .server h2,.meta { overflow-wrap:anywhere; }
+    @media(max-width:760px){.workspace{grid-template-columns:1fr}.sidebar{position:static}#server-nav{grid-template-columns:repeat(2,minmax(0,1fr))}}
     .server { padding:20px; }
     .server-head { display:flex; justify-content:space-between; gap:16px; align-items:center; }
     .server h2 { margin:0; font-size:19px; }
@@ -58,7 +70,7 @@
       <article><div class="label">在线</div><div id="online" class="value">0</div></article>
       <article><div class="label">需关注</div><div id="attention" class="value">0</div></article>
     </section>
-    <section id="servers"><div class="empty">尚未收到 Agent 数据</div></section>
+    <div class="workspace"><aside class="sidebar"><h2>服务器列表</h2><nav id="server-nav" aria-label="选择服务器"></nav></aside><section id="servers" aria-label="选中服务器详情"><div class="empty">尚未收到 Agent 数据</div></section></div>
   </main>
   <script>
     const nativeFetch=window.fetch.bind(window);
@@ -79,6 +91,19 @@
     let refreshing = false;
     const diskExpanded = new Set();
     const cards = new Map();
+    const choices = new Map();
+    let selectedID = null;
+    function selectServer(id, reload=true){
+      if(!cards.has(id))return;
+      selectedID=id;
+      for(const [key,card] of cards)card.hidden=key!==id;
+      for(const [key,button] of choices)button.setAttribute('aria-current',String(key===id));
+      if(reload){
+        if(expanded.has(id))loadHistory(id);
+        if(diskExpanded.has(id))loadDisk(id);
+        if(eventExpanded.has(id))loadEvents(id,cards.get(id).querySelector('[data-events]').dataset.before||'');
+      }
+    }
     const eventExpanded=new Set();
     async function loadEvents(id,before=''){
       const card=cards.get(id);if(!card)return;
@@ -204,9 +229,16 @@
         document.querySelector('#updated').textContent=`更新时间 ${new Date().toLocaleTimeString()}`;
         const container=document.querySelector('#servers');
         const ids=new Set(servers.map(s=>s.agent_id));
-        for(const [id,card] of cards){if(!ids.has(id)){card.remove();cards.delete(id);expanded.delete(id);diskExpanded.delete(id);}}
+        for(const [id,card] of cards){if(!ids.has(id)){card.remove();cards.delete(id);expanded.delete(id);diskExpanded.delete(id);eventExpanded.delete(id);choices.get(id)?.remove();choices.delete(id);}}
         if(servers.length)container.querySelector('.empty')?.remove();
         for(const s of servers){
+          if(!choices.has(s.agent_id)){
+            const button=document.createElement('button');button.type='button';button.className='server-choice';
+            button.append(document.createElement('span'),document.createElement('span'));button.lastChild.className='label';
+            button.onclick=()=>selectServer(s.agent_id);choices.set(s.agent_id,button);document.querySelector('#server-nav').append(button);
+          }
+          const choice=choices.get(s.agent_id);choice.firstChild.textContent=s.hostname||s.agent_id;
+          choice.lastChild.textContent=`${s.online?'在线':'离线'} · ${s.agent_id}`;
           if(cards.has(s.agent_id)){
             const card=cards.get(s.agent_id);
             card.querySelector('h2').textContent=s.hostname;
@@ -246,9 +278,14 @@
           const card=template.content.firstElementChild;cards.set(s.agent_id,card);container.append(card);bindHistoryButtons(card);
         }
         if(!servers.length && !container.querySelector('.empty'))container.innerHTML='<div class="empty">尚未收到 Agent 数据。启动 Agent 后这里会自动出现服务器。</div>';
-        expanded.forEach(loadHistory);
-        diskExpanded.forEach(loadDisk);
-        eventExpanded.forEach(id=>{const panel=cards.get(id)?.querySelector('[data-events]');if(panel && !panel.dataset.before)loadEvents(id);});
+        if(!cards.has(selectedID))selectedID=servers[0]?.agent_id??null;
+        if(selectedID!==null){
+          selectServer(selectedID,false);
+          if(expanded.has(selectedID))loadHistory(selectedID);
+          if(diskExpanded.has(selectedID))loadDisk(selectedID);
+          const panel=cards.get(selectedID)?.querySelector('[data-events]');
+          if(eventExpanded.has(selectedID) && panel && !panel.dataset.before)loadEvents(selectedID);
+        }
       } catch(error){ document.querySelector('#updated').textContent=`读取失败 ${error.message}`; }
       finally { refreshing=false; }
     }

@@ -21,6 +21,7 @@ var webFiles embed.FS
 
 type Server struct {
 	auth            *authState
+	secureCookies   bool
 	adminToken      string
 	token           string
 	store           MetricStore

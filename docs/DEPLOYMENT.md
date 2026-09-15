@@ -30,6 +30,14 @@ journalctl -u seesize-backup -n 30 --no-pager
 
 ## 修改配置与升级
 
+### HTTPS 反向代理的会话配置
+
+Hub 新增 `-secure-cookies` 开关：HTTPS 在反向代理终止时，必须启用，确保登录和退出的会话 Cookie 都带 Secure。默认关闭以兼容现有本机 HTTP / SSH 转发预览；此开关不安装证书，也不把 HTTP 服务自动转换为 HTTPS。
+
+公网部署需要有效 TLS 证书和 HTTPS 入口，Hub 继续绑定回环地址（代理在其他主机时应另设受限网络），不直接暴露后端端口。配置启用后，通过真实 HTTPS 浏览器验证登录、查询和退出，并将 Agent Hub 地址改为 HTTPS。不要对当前纯 HTTP 预览直接启用后就认定部署完成。
+
+程序不信任客户端提供的 `X-Forwarded-Proto` 来决定 Cookie 安全属性，避免伪造或错误代理头改变策略。此次仅补齐应用配置及自动测试，真实证书和代理部署尚未验收。
+
 使用 `systemctl edit seesize-agent` 的 override 修改配置。改变 ExecStart 前先写空的 `ExecStart=` 再写新命令；保留 `-token-file %d/agent-token`。可改上报周期、扫描目录和 Hub 地址。扫描受专用用户权限、ProtectHome 和只读沙箱限制，读取失败会产生不完整快照，不要直接改为 root 运行解决权限问题。当前模板只覆盖本机 Hub，远程 Agent 的地址与网络配置需单独调整。
 
 升级时先备份数据库，上传新可执行文件到临时名称，验证后停止相应服务、保留旧版本、替换程序，再启动并检查 healthz、登录和心跳。不要直接覆盖运行中的可执行文件。修改单元文件后执行 `systemctl daemon-reload`。此流程尚未封装为自动升级命令。

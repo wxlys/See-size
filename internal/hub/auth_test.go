@@ -10,6 +10,66 @@ import (
 	"time"
 )
 
+func TestSessionCookieTransportPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, scheme, forwarded string
+		force, wantSecure       bool
+	}{
+		{name: "local HTTP", scheme: "http"},
+		{name: "direct TLS", scheme: "https", wantSecure: true},
+		{name: "TLS proxy configured", scheme: "http", force: true, wantSecure: true},
+		{name: "untrusted forwarded header", scheme: "http", forwarded: "https"},
+		{name: "header cannot downgrade", scheme: "http", forwarded: "http", force: true, wantSecure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := OpenSQLite(filepath.Join(t.TempDir(), "auth.db"), time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			app, err := NewServer("", store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.SetAdminToken("independent-admin-secret"); err != nil {
+				t.Fatal(err)
+			}
+			app.SetSecureCookies(tc.force)
+			if err := app.EnableAuthentication(); err != nil {
+				t.Fatal(err)
+			}
+			handler := app.Handler()
+			var session *http.Cookie
+			for _, path := range []string{"/api/v1/login", "/api/v1/logout"} {
+				req := httptest.NewRequest("POST", tc.scheme+"://example.test"+path, bytes.NewBufferString(`{"credential":"independent-admin-secret"}`))
+				req.Header.Set("X-SeeSize-Request", "1")
+				req.Header.Set("X-Forwarded-Proto", tc.forwarded)
+				if session != nil {
+					req.AddCookie(session)
+				}
+				res := httptest.NewRecorder()
+				handler.ServeHTTP(res, req)
+				if res.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", path, res.Code, res.Body.String())
+				}
+				cookies := res.Result().Cookies()
+				if len(cookies) != 1 {
+					t.Fatalf("cookies: %v", cookies)
+				}
+				c := cookies[0]
+				if c.Secure != tc.wantSecure || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
+					t.Fatalf("%s: unsafe cookie %+v", path, c)
+				}
+				if path == "/api/v1/login" {
+					session = c
+				} else if c.MaxAge != -1 {
+					t.Fatal("logout did not expire cookie")
+				}
+			}
+		})
+	}
+}
+
 func TestLoginEnrollmentBindingRevocationLogout(t *testing.T) {
 	store, err := OpenSQLite(filepath.Join(t.TempDir(), "auth.db"), time.Minute)
 	if err != nil {
