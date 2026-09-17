@@ -1,0 +1,13 @@
+[Unit]
+Description=SeeSize user agent
+After=seesize-hub.service
+[Service]
+WorkingDirectory=%h/seesize
+ExecStart=%h/seesize/seesize-agent-linux-amd64 -hub http://127.0.0.1:18081 -id wsrser-main -token-file %h/seesize/agent.token -interval 10s
+Restart=on-failure
+RestartSec=5
+Nice=10
+UMask=0077
+NoNewPrivileges=yes
+[Install]
+WantedBy=default.target

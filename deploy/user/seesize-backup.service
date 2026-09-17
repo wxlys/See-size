@@ -1,0 +1,10 @@
+[Unit]
+Description=SeeSize user verified backup
+[Service]
+Type=oneshot
+ExecStart=%h/seesize/seesize-backup-linux-amd64 -source %h/seesize/data/seesize.db -dir %h/seesize/backups -keep 7
+TimeoutStartSec=6min
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=yes
