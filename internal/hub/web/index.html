@@ -51,7 +51,9 @@
     .charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
     .chart { background:#0e1629; border-radius:12px; padding:12px; min-width:0; }
     .chart-title { color:#9fb1d3; font-size:12px; margin-bottom:7px; display:flex; justify-content:space-between; }
-    canvas { width:100%; height:112px; display:block; }
+    canvas { width:100%; height:170px; display:block; }
+    .chart { position:relative; }
+    .chart-tooltip { position:absolute; left:12px; right:12px; top:28px; background:#18243a; border:1px solid #7ea7ff; border-radius:6px; padding:8px; font-size:12px; white-space:pre-line; pointer-events:none; z-index:2; }
     .empty { color:#92a4c5; text-align:center; padding:56px 20px; border:1px dashed #34466f; border-radius:16px; }
     @media(max-width:760px){header{align-items:start;flex-direction:column}.summary{grid-template-columns:1fr}.metrics,.charts{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:520px){.metrics,.charts{grid-template-columns:1fr}}
@@ -145,20 +147,38 @@
 
     function drawLines(canvas, samples, series, ceiling, step){
       const ratio=window.devicePixelRatio||1;
-      const width=Math.max(canvas.clientWidth,220), height=112;
+      const width=Math.max(canvas.clientWidth,220), height=170;
+      const left=66,right=12,top=10,bottom=30,pw=width-left-right,ph=height-top-bottom;
       canvas.width=width*ratio; canvas.height=height*ratio;
       const ctx=canvas.getContext('2d'); ctx.scale(ratio,ratio);
       ctx.clearRect(0,0,width,height);
       ctx.strokeStyle='#263858'; ctx.lineWidth=1;
-      for(let i=1;i<4;i++){const y=Math.round(height*i/4)+.5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke()}
       const values=series.flatMap(item=>samples.map(item.value)).filter(Number.isFinite);
       const max=Math.max(ceiling||0,...values,1), min=0;
       const start=samples.length?Date.parse(samples[0].at):0,end=samples.length?Date.parse(samples[samples.length-1].at):0;
+      const network=canvas.dataset.chart==='network';
+      const format=v=>network?fmtBytes(v)+'/s':v.toFixed(1)+'%';
+      ctx.font='10px system-ui';ctx.fillStyle='#9fb1d3';
+      for(let i=0;i<=4;i++){const y=top+ph*i/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();ctx.textAlign='right';ctx.fillText(format(max*(1-i/4)),left-5,y+3);}
+      if(samples.length)for(let i=0;i<=2;i++){ctx.textAlign=i===0?'left':i===2?'right':'center';ctx.fillText(new Date(start+(end-start)*i/2).toLocaleTimeString(),left+pw*i/2,height-8);}
+      let tip=canvas.parentElement.querySelector('.chart-tooltip');
+      if(!tip){tip=document.createElement('div');tip.className='chart-tooltip';tip.hidden=true;canvas.parentElement.append(tip);}
+      tip.hidden=true;
+      canvas.onpointerleave=()=>tip.hidden=true;
+      canvas.onpointermove=e=>{
+        const x=(e.clientX-canvas.getBoundingClientRect().left)*width/canvas.getBoundingClientRect().width;
+        if(!samples.length||x<left||x>width-right){tip.hidden=true;return;}
+        const time=start+(x-left)/pw*(end-start);
+        const sample=samples.reduce((a,b)=>Math.abs(Date.parse(a.at)-time)<Math.abs(Date.parse(b.at)-time)?a:b);
+        if(Math.abs(Date.parse(sample.at)-time)>step*1000){tip.textContent='该时间段无记录';tip.hidden=false;return;}
+        const names=network?['下载平均','下载峰值','上传平均','上传峰值']:['平均','峰值'];
+        tip.textContent=new Date(sample.at).toLocaleString()+' · 聚合 '+step+' 秒 · '+sample.count+' 个样本\n'+series.map((s,i)=>names[i]+'：'+format(s.value(sample))).join(' · ');tip.hidden=false;
+      };
       for(const item of series){
         ctx.strokeStyle=item.color; ctx.lineWidth=item.peak?1:2;ctx.setLineDash(item.peak?[3,3]:[]); ctx.lineJoin='round'; ctx.beginPath();
         samples.forEach((sample,index)=>{
-          const value=item.value(sample); const x=end===start?width/2:(Date.parse(sample.at)-start)*width/(end-start);
-          const y=height-5-(Math.max(min,Math.min(max,value))-min)*(height-10)/(max-min||1);
+          const value=item.value(sample); const x=end===start?left+pw/2:left+(Date.parse(sample.at)-start)*pw/(end-start);
+          const y=top+ph-(Math.max(min,Math.min(max,value))-min)*ph/(max-min||1);
           const gap=index && Date.parse(sample.at)-Date.parse(samples[index-1].at)>step*1000*1.5;
           index&&!gap?ctx.lineTo(x,y):ctx.moveTo(x,y);
           ctx.fillStyle=item.color;ctx.fillRect(x-1,y-1,2,2);

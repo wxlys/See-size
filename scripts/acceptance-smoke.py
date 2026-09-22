@@ -6,6 +6,7 @@ import http.cookiejar
 import http.server
 import json
 import os
+import resource
 from pathlib import Path
 import secrets
 import socket
@@ -22,8 +23,8 @@ def main():
     parser.add_argument('--files', type=int, default=1000)
     parser.add_argument('--out', required=True, help='new JSON report; must not exist')
     args = parser.parse_args()
-    if not 100 <= args.files <= 2000:
-        parser.error('--files must be 100..2000')
+    if not 100 <= args.files <= 10000:
+        parser.error('--files must be 100..10000 (isolated Linux VM only)')
     root = Path(args.root).resolve(strict=True)
     for name in ('hub', 'agent', 'scan'):
         if not os.access(root / ('seesize-' + name + '-linux-amd64'), os.X_OK):
@@ -127,16 +128,25 @@ def main():
                             (files / ('item-%04d.bin' % i)).write_bytes(b'x' * 4096)
                         initial = len(get('/api/v1/servers/isolated-smoke/metrics')['samples'])
                         started = time.monotonic()
+                        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
                         scan = subprocess.run([str(root / 'seesize-scan-linux-amd64'), '-root', str(files),
-                            '-max-entries', str(args.files + 10), '-rate', '200', '-timeout', '20s'],
-                            capture_output=True, text=True, timeout=25, check=True)
+                            '-max-entries', str(args.files + 10), '-rate', '200', '-timeout', '90s'],
+                            capture_output=True, text=True, timeout=100, check=True)
+                        usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
                         snapshot = json.loads(scan.stdout)
                         after = len(get('/api/v1/servers/isolated-smoke/metrics')['samples'])
                         assert snapshot['complete'] and snapshot['nodes'][0]['bytes'] == args.files * 4096
                         assert after > initial, 'heartbeat did not advance during scan'
                         report['directory_scan'] = {'files': args.files, 'logical_bytes': args.files * 4096,
                             'elapsed_seconds': round(time.monotonic() - started, 3),
-                            'new_heartbeats': after - initial, 'complete': True}
+                            'new_heartbeats': after - initial, 'complete': True,
+                            'scan_peak_rss_kib': usage_after.ru_maxrss,
+                            'scan_cpu_seconds': usage_after.ru_utime + usage_after.ru_stime - usage_before.ru_utime - usage_before.ru_stime}
+                        limited = subprocess.run([str(root / 'seesize-scan-linux-amd64'), '-root', str(files),
+                            '-max-entries', '10', '-rate', '200', '-timeout', '5s'],
+                            capture_output=True, text=True, timeout=10, check=True)
+                        assert not json.loads(limited.stdout)['complete'], 'budget exhaustion not marked incomplete'
+                        report['limited_scan'] = 'PASS: incomplete marked; local scan only, no alert upload'
                         report['status'] = 'PASS'
                     finally:
                         available.set()
