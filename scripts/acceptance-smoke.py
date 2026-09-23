@@ -130,8 +130,8 @@ def main():
                         started = time.monotonic()
                         usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
                         scan = subprocess.run([str(root / 'seesize-scan-linux-amd64'), '-root', str(files),
-                            '-max-entries', str(args.files + 10), '-rate', '200', '-timeout', '90s'],
-                            capture_output=True, text=True, timeout=100, check=True)
+                            '-max-entries', str(args.files + 10), '-rate', '200', '-timeout', '60s'],
+                            capture_output=True, text=True, timeout=75, check=True)
                         usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
                         snapshot = json.loads(scan.stdout)
                         after = len(get('/api/v1/servers/isolated-smoke/metrics')['samples'])
@@ -163,6 +163,10 @@ def main():
                         thread.join(timeout=3)
                         agent_log.seek(0)
                         report['agent_log_tail'] = agent_log.read()[-4000:]
+        except subprocess.CalledProcessError as error:
+            report['error'] = str(error)
+            report['command_stderr'] = (error.stderr or '')[-4000:]
+            report['command_stdout'] = (error.stdout or '')[-4000:]
         except Exception as error:
             report['error'] = str(error)
         finally:
