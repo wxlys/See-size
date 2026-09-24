@@ -28,6 +28,7 @@ func main() {
 	agentID := flag.String("id", envOr("SEE_SIZE_AGENT_ID", defaultAgentID()), "stable Agent identifier")
 	interval := flag.Duration("interval", 10*time.Second, "heartbeat interval")
 	once := flag.Bool("once", false, "collect and send one heartbeat")
+	networkInterfaces := flag.String("network-interfaces", "", "comma-separated Linux interfaces; empty sums all non-loopback interfaces")
 	scanRoot := flag.String("scan-root", "", "opt-in directory for scheduled disk snapshots")
 	scanInterval := flag.Duration("scan-interval", 30*time.Minute, "delay between completed scans (minimum 1m)")
 	scanTimeout := flag.Duration("scan-timeout", 15*time.Second, "soft scan time limit (up to 1m)")
@@ -61,6 +62,10 @@ func main() {
 	defer stop()
 	client := &http.Client{Timeout: 8 * time.Second}
 	metricsCollector := collector.New()
+	if err := metricsCollector.SetNetworkInterfaces(*networkInterfaces); err != nil {
+		slog.Error("invalid network selection", "error", err)
+		os.Exit(2)
+	}
 	if *scanRoot != "" {
 		go disk.Schedule(ctx, *scanInterval, func(parent context.Context) {
 			scanCtx, cancel := context.WithTimeout(parent, *scanTimeout)

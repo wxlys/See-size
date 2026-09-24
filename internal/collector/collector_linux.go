@@ -15,11 +15,9 @@ import (
 )
 
 type Collector struct {
-	previousCPU      cpuTimes
-	previousReceived uint64
-	previousSent     uint64
-	previousAt       time.Time
-	hasPrevious      bool
+	network     networkState
+	previousCPU cpuTimes
+	hasPrevious bool
 }
 
 func New() *Collector { return &Collector{} }
@@ -54,8 +52,15 @@ func (c *Collector) Collect(agentID, agentVersion string) (model.Heartbeat, erro
 		return model.Heartbeat{}, err
 	}
 
-	netBytes, _ := os.ReadFile("/proc/net/dev")
-	received, sent, _ := parseNetDev(string(netBytes))
+	netBytes, netErr := os.ReadFile("/proc/net/dev")
+	var network model.NetworkMetrics
+	if netErr == nil {
+		network, netErr = c.network.sample(string(netBytes), now)
+	}
+	if netErr != nil {
+		c.network.previous = nil
+		network.Scope = "unavailable"
+	}
 
 	var diskStat syscall.Statfs_t
 	if err := syscall.Statfs("/", &diskStat); err != nil {
@@ -67,23 +72,11 @@ func (c *Collector) Collect(agentID, agentVersion string) (model.Heartbeat, erro
 	freeDisk := diskStat.Bfree * blockSize
 	usedDisk := totalDisk - freeDisk
 
-	var cpuUsage, rxRate, txRate float64
+	var cpuUsage float64
 	if c.hasPrevious {
 		cpuUsage = cpuPercent(c.previousCPU, currentCPU)
-		seconds := now.Sub(c.previousAt).Seconds()
-		if seconds > 0 {
-			if received >= c.previousReceived {
-				rxRate = float64(received-c.previousReceived) / seconds
-			}
-			if sent >= c.previousSent {
-				txRate = float64(sent-c.previousSent) / seconds
-			}
-		}
 	}
 	c.previousCPU = currentCPU
-	c.previousReceived = received
-	c.previousSent = sent
-	c.previousAt = now
 	c.hasPrevious = true
 
 	uptime, _ := strconv.ParseFloat(strings.Fields(string(uptimeBytes))[0], 64)
@@ -138,12 +131,7 @@ func (c *Collector) Collect(agentID, agentVersion string) (model.Heartbeat, erro
 				UsedBytes:      usedDisk,
 				AvailableBytes: availableDisk,
 			},
-			Network: model.NetworkMetrics{
-				ReceivedBytes:          received,
-				TransmittedBytes:       sent,
-				ReceivedBytesPerSecond: rxRate,
-				SentBytesPerSecond:     txRate,
-			},
+			Network: network,
 		},
 	}, nil
 }

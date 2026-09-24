@@ -22,10 +22,13 @@ type DiskMetrics struct {
 }
 
 type NetworkMetrics struct {
-	ReceivedBytes          uint64  `json:"received_bytes"`
-	TransmittedBytes       uint64  `json:"transmitted_bytes"`
-	ReceivedBytesPerSecond float64 `json:"received_bytes_per_second"`
-	SentBytesPerSecond     float64 `json:"sent_bytes_per_second"`
+	Scope                  string   `json:"scope,omitempty"`
+	Interfaces             []string `json:"interfaces,omitempty"`
+	MissingInterfaces      []string `json:"missing_interfaces,omitempty"`
+	ReceivedBytes          uint64   `json:"received_bytes"`
+	TransmittedBytes       uint64   `json:"transmitted_bytes"`
+	ReceivedBytesPerSecond float64  `json:"received_bytes_per_second"`
+	SentBytesPerSecond     float64  `json:"sent_bytes_per_second"`
 }
 
 type Metrics struct {

@@ -10,7 +10,7 @@ import (
 	"github.com/seesize/seesize/internal/model"
 )
 
-type Collector struct{}
+type Collector struct{ network networkState }
 
 func New() *Collector { return &Collector{} }
 

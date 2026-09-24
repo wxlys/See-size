@@ -93,6 +93,11 @@
     let refreshing = false;
     const diskExpanded = new Set();
     const cards = new Map();
+    function networkNote(network={}){
+      if(network.scope==='unavailable')return '网络读取失败，本次速率不可用（数值占位为 0）';
+      const scope=network.scope==='selected'?'指定网卡':'全部非回环网卡（可能含虚拟网卡重复流量）';
+      return '当前网络口径：'+(network.scope?scope:'旧 Agent 未标注，旧版为全部非回环网卡')+' · '+(network.interfaces||[]).join(', ')+(network.missing_interfaces?.length?' · 缺失网卡：'+network.missing_interfaces.join(', ')+'，合计不完整':'')+'。单位 B/s；不是公网带宽。首次采样或网卡重置后以 0 建立基线；历史包含各采样时的口径，配置切换前后不可直接比较。';
+    }
     const choices = new Map();
     let selectedID = null;
     function selectServer(id, reload=true){
@@ -262,6 +267,7 @@
           if(cards.has(s.agent_id)){
             const card=cards.get(s.agent_id);
             card.querySelector('h2').textContent=s.hostname;
+            card.querySelector('.network-scope').textContent=networkNote(s.metrics?.network);
             card.querySelector('.meta').textContent=`${s.distribution||s.os} ${s.system_version} · ${s.architecture} · ${s.observed_ip}`;
             const badge=card.querySelector('.server-head .pill');badge.className=`pill ${s.online?'online':'offline'}`;badge.textContent=s.online?'在线':'离线';
             const values=[`${Number(s.metrics?.cpu_percent||0).toFixed(1)}%`,pct(s.metrics?.memory?.used_bytes,s.metrics?.memory?.total_bytes),pct(s.metrics?.root_disk?.used_bytes,s.metrics?.root_disk?.total_bytes),`${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s`];
@@ -279,6 +285,7 @@
               <div class="metric"><div class="label">根磁盘</div><strong>${pct(s.metrics?.root_disk?.used_bytes,s.metrics?.root_disk?.total_bytes)}</strong></div>
               <div class="metric"><div class="label">网络下行</div><strong>${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s</strong></div>
             </div>
+            <p class="network-scope label">${esc(networkNote(s.metrics?.network))}</p>
             <div class="actions"><button type="button" data-history-toggle="${key}">${isExpanded?'收起历史':'查看历史'}</button></div>
             <div class="actions"><button type="button" data-disk-toggle="${key}">目录空间分析</button></div>
             <div class="actions"><button type="button" data-event-toggle>告警历史</button></div>
