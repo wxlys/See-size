@@ -70,6 +70,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "registration failed"})
 		return
 	}
+	if _, err = tx.ExecContext(r.Context(), `DELETE FROM deleted_devices WHERE agent_id=?`, input.AgentID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "registration failed"})
+		return
+	}
 	if tx.Commit() != nil {
 		writeJSON(w, 500, map[string]string{"error": "registration failed"})
 		return
@@ -82,7 +86,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 503, map[string]string{"error": "storage unavailable"})
 		return
 	}
-	rows, err := store.db.QueryContext(r.Context(), `SELECT agent_id,revoked FROM devices ORDER BY agent_id`)
+	rows, err := store.db.QueryContext(r.Context(), `SELECT agent_id,revoked FROM devices WHERE agent_id NOT IN (SELECT agent_id FROM deleted_devices) ORDER BY agent_id`)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "storage unavailable"})
 		return

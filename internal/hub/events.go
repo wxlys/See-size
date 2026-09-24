@@ -37,6 +37,13 @@ func (s *SQLiteStore) SaveDiskEvents(ctx context.Context, snap disk.Snapshot, th
 		return err
 	}
 	defer tx.Rollback()
+	var deleted int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM deleted_devices WHERE agent_id=?`, snap.AgentID).Scan(&deleted); err != nil {
+		return err
+	}
+	if deleted > 0 {
+		return errors.New("device deleted")
+	}
 	var previous disk.Snapshot
 	var old []byte
 	err = tx.QueryRowContext(ctx, `SELECT snapshot_json FROM disk_snapshots WHERE agent_id=? AND root=? ORDER BY at_ns DESC LIMIT 1`, snap.AgentID, snap.Root).Scan(&old)

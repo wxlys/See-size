@@ -45,6 +45,7 @@ func OpenSQLite(path string, offlineAfter time.Duration) (*SQLiteStore, error) {
 
 func (s *SQLiteStore) initialize(ctx context.Context) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS deleted_devices(agent_id TEXT PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS devices(agent_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL UNIQUE,revoked INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS enrollments(agent_id TEXT PRIMARY KEY,code_hash TEXT NOT NULL UNIQUE,expires_ns INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS disk_events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, delta INTEGER NOT NULL, threshold INTEGER NOT NULL, from_ns INTEGER NOT NULL, to_ns INTEGER NOT NULL, ack_ns INTEGER, UNIQUE(agent_id,root,path,to_ns))`,
@@ -96,6 +97,13 @@ func (s *SQLiteStore) Upsert(ctx context.Context, heartbeat model.Heartbeat, obs
 		return fmt.Errorf("begin heartbeat transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var deleted int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM deleted_devices WHERE agent_id=?`, heartbeat.AgentID).Scan(&deleted); err != nil {
+		return err
+	}
+	if deleted > 0 {
+		return fmt.Errorf("device deleted")
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO servers(agent_id, heartbeat_json, observed_ip, last_seen_ns)
 		VALUES (?, ?, ?, ?)

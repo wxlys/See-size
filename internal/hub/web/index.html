@@ -78,7 +78,22 @@
     const nativeFetch=window.fetch.bind(window);
     window.fetch=async(url,options={})=>{const headers=new Headers(options.headers);if(options.method && options.method!=='GET')headers.set('X-SeeSize-Request','1');const res=await nativeFetch(url,{...options,headers});if(res.status===401)location.replace('/login');return res;};
     document.querySelector('#logout').onclick=async()=>{await fetch('/api/v1/logout',{method:'POST'});location.replace('/login');};
-    async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)throw new Error('设备读取失败');const data=await res.json();const list=document.querySelector('#device-list');list.replaceChildren();for(const device of data.devices){const row=document.createElement('p');row.textContent=device.agent_id+' · '+(device.revoked?'已撤销':'已授权')+' ';if(!device.revoked){const button=document.createElement('button');button.textContent='撤销凭据';button.onclick=async()=>{if(!confirm('撤销后该设备将无法继续上报，是否继续？'))return;const res=await fetch('/api/v1/devices/'+encodeURIComponent(device.agent_id)+'/revoke',{method:'POST'});if(res.ok)devices();else document.querySelector('#device-message').textContent='撤销失败';};row.append(button)}list.append(row)}}
+async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)throw new Error('设备读取失败');const data=await res.json();const list=document.querySelector('#device-list');list.replaceChildren();for(const device of data.devices){const row=document.createElement('p');row.textContent=device.agent_id+' · '+(device.revoked?'已撤销':'已授权')+' ';if(!device.revoked){const button=document.createElement('button');button.textContent='撤销凭据';button.onclick=async()=>{if(!confirm('撤销后该设备将无法继续上报，是否继续？'))return;const res=await fetch('/api/v1/devices/'+encodeURIComponent(device.agent_id)+'/revoke',{method:'POST'});if(res.ok)devices();else document.querySelector('#device-message').textContent='撤销失败';};row.append(button)}if(device.revoked)addDeleteButton(row,device.agent_id);list.append(row)}}
+    function addDeleteButton(row,id){
+      const button=document.createElement('button');button.textContent='删除设备及历史';
+      button.onclick=async()=>{
+        const answer=prompt('永久删除该设备的在线历史、快照和告警，不删除备份，也不会卸载远端 Agent。请先停止该 Agent。\n输入完整设备 ID 确认：'+id);
+        if(answer===null)return;
+        const message=document.querySelector('#device-message');
+        if(answer!==id){message.textContent='设备 ID 不匹配，未删除';return;}
+        button.disabled=true;
+        try{
+          const res=await fetch('/api/v1/devices/'+encodeURIComponent(id),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_id:answer})});
+          if(!res.ok)throw new Error('删除失败（HTTP '+res.status+'），请刷新设备状态');
+          message.textContent='已删除设备及在线历史；既有备份不受影响。';await devices();await refresh();
+        }catch(e){message.textContent=e.message;button.disabled=false;}
+      };row.append(button);
+    }
     document.querySelector('#devices-toggle').onclick=async()=>{const panel=document.querySelector('#devices-panel');panel.hidden=!panel.hidden;if(!panel.hidden)try{await devices()}catch(e){document.querySelector('#device-message').textContent=e.message}};
     document.querySelector('#enroll').onclick=async()=>{const message=document.querySelector('#device-message');try{const res=await fetch('/api/v1/enrollments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:document.querySelector('#enroll-id').value.trim()})});if(!res.ok)throw new Error('创建失败，请检查设备 ID');const data=await res.json();message.textContent='一次性注册码（10 分钟内使用）：'+data.code}catch(e){message.textContent=e.message}};
     const fmtBytes = value => {

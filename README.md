@@ -1,5 +1,7 @@
 # SeeSize
 
+设备管理新增“删除设备及历史”：先撤销凭据，再输入完整 ID 确认；不会删除备份或卸载远端 Agent。详见 [设备删除说明](docs/DEVICE-DELETION.md)。
+
 网络口径配置：Agent 支持 `-network-interfaces eth0`，空值兼容全部非回环网卡合计。页面显示当前接口及缺失警告，详见 [网络口径说明](docs/NETWORK-SCOPE.md)。新增协议字段需先升级 Hub，再升级 Agent。
 
 当前运行环境已于 2026-09-17 从即将回收的 18 迁至 wsrser，详见 [迁移记录](docs/MIGRATION-20260917.md)。本地预览仍为 18082，新远端端口为 18081；历史部署文档中的旧路径不适用于新主机。
