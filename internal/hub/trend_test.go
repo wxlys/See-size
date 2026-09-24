@@ -62,3 +62,43 @@ func TestTrendAllRecordsGapsAndPeaks(t *testing.T) {
 		t.Fatal("invalid range accepted")
 	}
 }
+
+func TestTrendNetworkUnavailableAndScopeChanges(t *testing.T) {
+	s, err := OpenSQLite(filepath.Join(t.TempDir(), "network.db"), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	from := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	if _, err = s.db.Exec(`INSERT INTO servers VALUES ('test','{}','',0)`); err != nil {
+		t.Fatal(err)
+	}
+	bodies := []string{
+		`{"cpu_percent":10,"network":{"received_bytes_per_second":12}}`,
+		`{"cpu_percent":10,"network":{"scope":"unavailable"}}`,
+		`{"cpu_percent":10,"network":{"scope":"selected","interfaces":["eth0"],"rate_unavailable":true}}`,
+		`{"cpu_percent":10,"network":{"scope":"selected","interfaces":["eth0"],"received_bytes_per_second":20}}`,
+		`{"cpu_percent":10,"network":{"scope":"selected","interfaces":["eth1"],"received_bytes_per_second":30}}`,
+	}
+	for i, body := range bodies {
+		offset := time.Duration(i) * 10 * time.Second
+		if i == 4 {
+			offset = 31 * time.Second
+		}
+		if _, err = s.db.Exec(`INSERT INTO metric_samples VALUES (?,?,?)`, "test", from.Add(offset).UnixNano(), body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Trend(context.Background(), "test", from, from.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Points) != 4 {
+		t.Fatal(got)
+	}
+	for i, p := range got.Points {
+		if p.NetworkUnavailable != (i > 0) || p.Average[0] != 10 {
+			t.Fatalf("bucket %d: %+v", i, p)
+		}
+	}
+}

@@ -94,7 +94,8 @@
     const diskExpanded = new Set();
     const cards = new Map();
     function networkNote(network={}){
-      if(network.scope==='unavailable')return '网络读取失败，本次速率不可用（数值占位为 0）';
+      if(network.scope==='unavailable')return '网络读取失败，本次速率不可用';
+      if(network.rate_unavailable)return '网络速率不可用：首次基线、接口变化或缺失。接口：'+(network.interfaces||[]).join(', ')+'；缺失：'+(network.missing_interfaces||[]).join(', ');
       const scope=network.scope==='selected'?'指定网卡':'全部非回环网卡（可能含虚拟网卡重复流量）';
       return '当前网络口径：'+(network.scope?scope:'旧 Agent 未标注，旧版为全部非回环网卡')+' · '+(network.interfaces||[]).join(', ')+(network.missing_interfaces?.length?' · 缺失网卡：'+network.missing_interfaces.join(', ')+'，合计不完整':'')+'。单位 B/s；不是公网带宽。首次采样或网卡重置后以 0 建立基线；历史包含各采样时的口径，配置切换前后不可直接比较。';
     }
@@ -176,6 +177,7 @@
         const time=start+(x-left)/pw*(end-start);
         const sample=samples.reduce((a,b)=>Math.abs(Date.parse(a.at)-time)<Math.abs(Date.parse(b.at)-time)?a:b);
         if(Math.abs(Date.parse(sample.at)-time)>step*1000){tip.textContent='该时间段无记录';tip.hidden=false;return;}
+        if(network && sample.network_unavailable){tip.textContent='该聚合时段网络数据不可用或统计口径发生变化';tip.hidden=false;return;}
         const names=network?['下载平均','下载峰值','上传平均','上传峰值']:['平均','峰值'];
         tip.textContent=new Date(sample.at).toLocaleString()+' · 聚合 '+step+' 秒 · '+sample.count+' 个样本\n'+series.map((s,i)=>names[i]+'：'+format(s.value(sample))).join(' · ');tip.hidden=false;
       };
@@ -183,8 +185,9 @@
         ctx.strokeStyle=item.color; ctx.lineWidth=item.peak?1:2;ctx.setLineDash(item.peak?[3,3]:[]); ctx.lineJoin='round'; ctx.beginPath();
         samples.forEach((sample,index)=>{
           const value=item.value(sample); const x=end===start?left+pw/2:left+(Date.parse(sample.at)-start)*pw/(end-start);
+          if(!Number.isFinite(value))return;
           const y=top+ph-(Math.max(min,Math.min(max,value))-min)*ph/(max-min||1);
-          const gap=index && Date.parse(sample.at)-Date.parse(samples[index-1].at)>step*1000*1.5;
+          const gap=index && (Date.parse(sample.at)-Date.parse(samples[index-1].at)>step*1000*1.5 || !Number.isFinite(item.value(samples[index-1])) || (network && sample.network_scope!==samples[index-1].network_scope));
           index&&!gap?ctx.lineTo(x,y):ctx.moveTo(x,y);
           ctx.fillStyle=item.color;ctx.fillRect(x-1,y-1,2,2);
         });
@@ -203,7 +206,7 @@
         const data=await response.json();if(Number(panel.dataset.sequence)!==sequence)return;
         const samples=data.points;
         panel.querySelector('.history-note').textContent=samples.length?`实际数据：${new Date(data.first).toLocaleString()} — ${new Date(data.last).toLocaleString()} · 每 ${data.step_seconds} 秒聚合`:'所选时间范围暂无数据';
-        const lines=(i,color)=>[{value:s=>s.average[i],color},{value:s=>s.peak[i],color,peak:true}];
+        const lines=(i,color)=>[{value:s=>i>=3&&s.network_unavailable?NaN:s.average[i],color},{value:s=>i>=3&&s.network_unavailable?NaN:s.peak[i],color,peak:true}];
         drawLines(panel.querySelector('[data-chart="cpu"]'),samples,lines(0,'#65d6ad'),100,data.step_seconds);
         drawLines(panel.querySelector('[data-chart="memory"]'),samples,lines(1,'#7ea7ff'),100,data.step_seconds);
         drawLines(panel.querySelector('[data-chart="network"]'),samples,[...lines(3,'#64d8ff'),...lines(4,'#f6b86a')],0,data.step_seconds);
@@ -272,6 +275,7 @@
             const badge=card.querySelector('.server-head .pill');badge.className=`pill ${s.online?'online':'offline'}`;badge.textContent=s.online?'在线':'离线';
             const values=[`${Number(s.metrics?.cpu_percent||0).toFixed(1)}%`,pct(s.metrics?.memory?.used_bytes,s.metrics?.memory?.total_bytes),pct(s.metrics?.root_disk?.used_bytes,s.metrics?.root_disk?.total_bytes),`${fmtBytes(s.metrics?.network?.received_bytes_per_second)}/s`];
             card.querySelectorAll('.metrics strong').forEach((node,i)=>{node.textContent=values[i];});
+            if(s.metrics?.network?.rate_unavailable||s.metrics?.network?.scope==='unavailable')card.querySelectorAll('.metrics strong')[3].textContent='暂无';
             continue;
           }
           const key=esc(encodeURIComponent(s.agent_id)); const isExpanded=expanded.has(s.agent_id);

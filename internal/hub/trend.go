@@ -10,10 +10,12 @@ import (
 
 // Values are CPU %, memory %, disk %, download B/s, upload B/s.
 type TrendPoint struct {
-	At      time.Time  `json:"at"`
-	Count   int        `json:"count"`
-	Average [5]float64 `json:"average"`
-	Peak    [5]float64 `json:"peak"`
+	NetworkUnavailable bool       `json:"network_unavailable"`
+	NetworkScope       string     `json:"network_scope"`
+	At                 time.Time  `json:"at"`
+	Count              int        `json:"count"`
+	Average            [5]float64 `json:"average"`
+	Peak               [5]float64 `json:"peak"`
 }
 type Trend struct {
 	From        time.Time    `json:"from"`
@@ -55,6 +57,16 @@ func (s *SQLiteStore) Trend(ctx context.Context, id string, from, to time.Time) 
 			continue
 		}
 		b := &buckets[index]
+		scopeBytes, _ := json.Marshal([]any{m.Network.Scope, m.Network.Interfaces})
+		scope := string(scopeBytes)
+		if b.Count == 0 {
+			b.NetworkScope = scope
+		} else if b.NetworkScope != scope {
+			b.NetworkUnavailable = true
+		}
+		if m.Network.RateUnavailable || m.Network.Scope == "unavailable" || len(m.Network.MissingInterfaces) > 0 {
+			b.NetworkUnavailable = true
+		}
 		b.At = from.Add(time.Duration(index) * step)
 		b.Count++
 		values := [5]float64{m.CPUPercent, 0, 0, m.Network.ReceivedBytesPerSecond, m.Network.SentBytesPerSecond}

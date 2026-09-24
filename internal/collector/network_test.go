@@ -19,7 +19,7 @@ func TestNetworkSelectionLifecycle(t *testing.T) {
 		t.Fatalf("baseline %+v %v", first, err)
 	}
 	next, err := c.network.sample(input("200", "400"), now.Add(10*time.Second))
-	if err != nil || next.ReceivedBytesPerSecond != 10 || next.SentBytesPerSecond != 20 {
+	if err != nil || next.RateUnavailable || next.ReceivedBytesPerSecond != 10 || next.SentBytesPerSecond != 20 {
 		t.Fatalf("rates %+v %v", next, err)
 	}
 	missing, err := c.network.sample("", now.Add(20*time.Second))
@@ -27,7 +27,7 @@ func TestNetworkSelectionLifecycle(t *testing.T) {
 		t.Fatal("missing", missing, err)
 	}
 	back, err := c.network.sample(input("100000", "200000"), now.Add(30*time.Second))
-	if err != nil || back.ReceivedBytesPerSecond != 0 {
+	if err != nil || !back.RateUnavailable || back.ReceivedBytesPerSecond != 0 {
 		t.Fatal("reappearing spike", back, err)
 	}
 	reset, err := c.network.sample(input("1", "2"), now.Add(40*time.Second))

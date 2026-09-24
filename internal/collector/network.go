@@ -87,6 +87,7 @@ func (n *networkState) sample(input string, now time.Time) (model.NetworkMetrics
 		}
 	}
 	seconds := now.Sub(n.at).Seconds()
+	result.RateUnavailable = len(counters) == 0 || len(result.MissingInterfaces) > 0 || seconds <= 0 || n.previous == nil || len(n.previous) != len(counters)
 	for name, current := range counters {
 		result.Interfaces = append(result.Interfaces, name)
 		result.ReceivedBytes += current.rx
@@ -96,7 +97,11 @@ func (n *networkState) sample(input string, now time.Time) (model.NetworkMetrics
 			if current.rx >= old.rx && current.tx >= old.tx {
 				result.ReceivedBytesPerSecond += float64(current.rx-old.rx) / seconds
 				result.SentBytesPerSecond += float64(current.tx-old.tx) / seconds
+			} else {
+				result.RateUnavailable = true
 			}
+		} else {
+			result.RateUnavailable = true
 		}
 	}
 	sort.Strings(result.Interfaces)

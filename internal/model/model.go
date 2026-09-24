@@ -22,6 +22,7 @@ type DiskMetrics struct {
 }
 
 type NetworkMetrics struct {
+	RateUnavailable        bool     `json:"rate_unavailable,omitempty"`
 	Scope                  string   `json:"scope,omitempty"`
 	Interfaces             []string `json:"interfaces,omitempty"`
 	MissingInterfaces      []string `json:"missing_interfaces,omitempty"`
