@@ -1,5 +1,7 @@
 # SeeSize
 
+Windows 本地预览现在可用 `./scripts/preview-control.ps1 -Action Start|Stop|Status|Diagnose` 管理（执行时选择一个 Action），见 [转发维护手册](docs/PREVIEW-MAINTENANCE.md)。未配置登录自启。
+
 存储维护：7 天历史、7 份日常备份、3 个登记回退点、临时文件到期清理及容量检测，规则与边界见 [存储生命周期](docs/STORAGE-LIFECYCLE.md)。新增升级/演练产物必须登记，未知文件不自动删除。
 
 备份状态面板支持查看最近任务结果和文件数量，需配置 Hub 的 `-backup-dir` 并使用新版备份程序，详见 [备份状态说明](docs/BACKUP-STATUS.md)。
