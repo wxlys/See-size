@@ -44,7 +44,7 @@ func run() error {
 	}
 	for {
 		work, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		path, removed, err := backup.Create(work, *source, *dir, *keep)
+		path, removed, err := backup.CreateObserved(work, *source, *dir, *keep)
 		cancel()
 		if err != nil {
 			if *interval == 0 {

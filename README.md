@@ -1,5 +1,7 @@
 # SeeSize
 
+备份状态面板支持查看最近任务结果和文件数量，需配置 Hub 的 `-backup-dir` 并使用新版备份程序，详见 [备份状态说明](docs/BACKUP-STATUS.md)。
+
 设备管理新增“删除设备及历史”：先撤销凭据，再输入完整 ID 确认；不会删除备份或卸载远端 Agent。详见 [设备删除说明](docs/DEVICE-DELETION.md)。
 
 网络口径配置：Agent 支持 `-network-interfaces eth0`，空值兼容全部非回环网卡合计。页面显示当前接口及缺失警告，详见 [网络口径说明](docs/NETWORK-SCOPE.md)。新增协议字段需先升级 Hub，再升级 Agent。

@@ -21,6 +21,7 @@ func main() {
 	secureCookies := flag.Bool("secure-cookies", false, "require HTTPS for session cookies (enable behind a TLS reverse proxy)")
 	offlineAfter := flag.Duration("offline-after", 35*time.Second, "time without heartbeat before a server is offline")
 	dataPath := flag.String("data", ".data/seesize.db", "SQLite database path")
+	backupDir := flag.String("backup-dir", "", "dedicated backup directory for read-only status panel; empty disables")
 	retentionDays := flag.Int("retention-days", 7, "days to retain metrics and disk snapshots (1..365)")
 	growthMiB := flag.Int64("disk-growth-mib", 100, "directory growth warning threshold per scan interval (MiB)")
 	cleanupInterval := flag.Duration("cleanup-interval", 10*time.Minute, "expired data cleanup interval (1s..24h)")
@@ -59,6 +60,7 @@ func main() {
 		os.Exit(2)
 	}
 
+	app.SetBackupDirectory(*backupDir)
 	app.SetSecureCookies(*secureCookies)
 	if err := app.EnableAuthentication(); err != nil {
 		slog.Error("login configuration invalid", "error", err)

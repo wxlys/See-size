@@ -22,6 +22,7 @@ var webFiles embed.FS
 type Server struct {
 	auth            *authState
 	secureCookies   bool
+	backupDir       string
 	adminToken      string
 	token           string
 	store           MetricStore
@@ -50,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/devices", s.handleDevices)
+	mux.HandleFunc("GET /api/v1/backup-status", s.handleBackupStatus)
 	mux.HandleFunc("POST /api/v1/enrollments", s.handleEnrollment)
 	mux.HandleFunc("POST /api/v1/devices/{agentID}/revoke", s.handleRevoke)
 	mux.HandleFunc("DELETE /api/v1/devices/{agentID}", s.handleDeleteDevice)

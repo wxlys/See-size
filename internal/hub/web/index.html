@@ -65,7 +65,8 @@
     <div id="updated" class="status">正在读取数据</div>
   </header>
   <main>
-    <div class="actions"><button id="devices-toggle">设备管理</button><button id="logout">退出登录</button></div>
+    <div class="actions"><button id="backup-toggle">备份状态</button><button id="devices-toggle">设备管理</button><button id="logout">退出登录</button></div>
+    <section id="backup-panel" class="server" hidden><h2>备份状态</h2><p id="backup-result" role="status">正在读取</p><p class="label">这里只读查看，不会触发备份或恢复。文件数量不代表每份备份都已重新验证；最近一次成功也不能替代恢复演练。状态长时间停留在执行中可能是进程被中断，请检查服务日志。</p></section>
     <section id="devices-panel" class="server" hidden><h2>设备管理</h2><p class="label">使用稳定且唯一的设备 ID。注册码有效期 10 分钟，只能使用一次；重新注册将替换原设备凭据。</p><label>设备 ID <input id="enroll-id" maxlength="128"></label><button id="enroll">生成注册码</button><p id="device-message" role="status"></p><div id="device-list"></div></section>
     <section class="summary">
       <article><div class="label">服务器总数</div><div id="total" class="value">0</div></article>
@@ -78,6 +79,22 @@
     const nativeFetch=window.fetch.bind(window);
     window.fetch=async(url,options={})=>{const headers=new Headers(options.headers);if(options.method && options.method!=='GET')headers.set('X-SeeSize-Request','1');const res=await nativeFetch(url,{...options,headers});if(res.status===401)location.replace('/login');return res;};
     document.querySelector('#logout').onclick=async()=>{await fetch('/api/v1/logout',{method:'POST'});location.replace('/login');};
+    let backupLoading=false;
+    async function loadBackup(){
+      if(backupLoading)return;backupLoading=true;
+      const out=document.querySelector('#backup-result');
+      try{
+        const res=await fetch('/api/v1/backup-status',{cache:'no-store'});if(!res.ok)throw new Error('HTTP '+res.status);
+        const data=await res.json();
+        if(!data.configured){out.textContent='尚未配置备份目录，无法判定备份状态。';return;}
+        const summary=`现有备份：${data.files} 份 · ${fmtBytes(data.bytes)}。`;
+        if(!data.status_readable||!data.latest){out.textContent=summary+' 最近执行结果未知（旧版备份程序未记录或状态文件不可读）。';return;}
+        const s=data.latest,labels={success:'成功',failed:'失败，请查看备份服务日志',running:'执行中或上次执行被中断'};
+        out.textContent=summary+` 最近任务：${labels[s.state]||'未知'} · 开始：${new Date(s.started_at).toLocaleString()}`+(s.finished_at?` · 结束：${new Date(s.finished_at).toLocaleString()}`:'')+` · 本次保留策略：${s.keep} 份`+(s.file?' · 本次生成文件：'+s.file:'');
+      }catch(e){out.textContent='备份状态读取失败：'+e.message+'；不能据此判断备份成功。';}
+      finally{backupLoading=false;}
+    }
+    document.querySelector('#backup-toggle').onclick=()=>{const panel=document.querySelector('#backup-panel');panel.hidden=!panel.hidden;if(!panel.hidden)loadBackup();};
 async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)throw new Error('设备读取失败');const data=await res.json();const list=document.querySelector('#device-list');list.replaceChildren();for(const device of data.devices){const row=document.createElement('p');row.textContent=device.agent_id+' · '+(device.revoked?'已撤销':'已授权')+' ';if(!device.revoked){const button=document.createElement('button');button.textContent='撤销凭据';button.onclick=async()=>{if(!confirm('撤销后该设备将无法继续上报，是否继续？'))return;const res=await fetch('/api/v1/devices/'+encodeURIComponent(device.agent_id)+'/revoke',{method:'POST'});if(res.ok)devices();else document.querySelector('#device-message').textContent='撤销失败';};row.append(button)}if(device.revoked)addDeleteButton(row,device.agent_id);list.append(row)}}
     function addDeleteButton(row,id){
       const button=document.createElement('button');button.textContent='删除设备及历史';
@@ -259,6 +276,7 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
     }
 
     async function refresh(){
+      if(!document.querySelector('#backup-panel').hidden)loadBackup();
       if(refreshing) return; refreshing=true;
       try {
         const response=await fetch('/api/v1/servers',{cache:'no-store'});
