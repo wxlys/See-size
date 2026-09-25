@@ -1,0 +1,10 @@
+[Unit]
+Description=SeeSize registered artifact retention and storage check
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/seesize/storage-maintenance.py --apply
+TimeoutStartSec=2min
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes

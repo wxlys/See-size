@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily SeeSize storage maintenance
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=5min
+Persistent=yes
+[Install]
+WantedBy=timers.target
