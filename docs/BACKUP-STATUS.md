@@ -10,4 +10,8 @@ Hub 新参数 `-backup-dir /path/to/backups` 指向专用备份目录。默认�
 
 Hub 需要目录只读权限，backup 需要写权限。升级需同时部署新版 Hub 与 backup，并设置 Hub 的 -backup-dir；旧 backup 不产生状态文件，直到新版首次执行前显示未知是预期。不要为查看状态提高服务权限或开启公网目录浏览。
 
-当前本地 Go 测试、静态检查及浏览器状态切换测试通过，尚未部署线上。状态写入失败会令本轮命令返回错误，已成功生成的 .db 可能仍保留；先检查日志，不自动重跑以免额外轮换旧备份。
+本地 Go 测试、静态检查及浏览器状态切换测试通过。2026-09-25 已部署 wsrser Hub/backup，Hub override 位于 deploy/user/backup-panel.conf。升级前备份与旧程序保留在 /home/wsr/seesize/pre-backup-panel-20260925。未重启 Agent；备份 timer 更新期间暂时停止并已恢复。
+
+部署后真实备份于香港时间 23:09:14 成功结束，状态接口 success、status_readable=true、现有 7 份共 187695104 字节，原保留策略清理最旧一份。未登录接口返回 401，登录查询及页面入口检查通过。Hub/Agent/timer 和原有 Docker/site_total 均 active。本地 18082 转发已恢复，用户页面人工复验待完成。
+
+状态写入失败会令本轮命令返回错误，已成功生成的 .db 可能仍保留；先检查日志，不自动重跑以免额外轮换旧备份。
