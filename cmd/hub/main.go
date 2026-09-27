@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/seesize/seesize/internal/hub"
+	"github.com/seesize/seesize/internal/secretflag"
 )
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "address for the hub HTTP server")
-	token := flag.String("agent-token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "temporary shared Agent token")
+	token := flag.String("agent-token", "", "temporary shared Agent token (defaults to environment)")
 	adminFile := flag.String("admin-token-file", "", "read management credential from protected file")
 	secureCookies := flag.Bool("secure-cookies", false, "require HTTPS for session cookies (enable behind a TLS reverse proxy)")
 	offlineAfter := flag.Duration("offline-after", 35*time.Second, "time without heartbeat before a server is offline")
@@ -26,6 +27,7 @@ func main() {
 	growthMiB := flag.Int64("disk-growth-mib", 100, "directory growth warning threshold per scan interval (MiB)")
 	cleanupInterval := flag.Duration("cleanup-interval", 10*time.Minute, "expired data cleanup interval (1s..24h)")
 	flag.Parse()
+	secretflag.Environment(flag.CommandLine, "agent-token", token, os.Getenv, "SEE_SIZE_AGENT_TOKEN")
 	if *growthMiB < 1 || *growthMiB > 1048576 || *retentionDays < 1 || *retentionDays > 365 || *cleanupInterval < time.Second || *cleanupInterval > 24*time.Hour {
 		slog.Error("retention days must be 1..365, cleanup interval 1s..24h, and disk growth threshold 1..1048576 MiB")
 		os.Exit(2)

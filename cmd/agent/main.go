@@ -17,13 +17,14 @@ import (
 
 	"github.com/seesize/seesize/internal/collector"
 	"github.com/seesize/seesize/internal/disk"
+	"github.com/seesize/seesize/internal/secretflag"
 )
 
 const version = "0.1.0-dev"
 
 func main() {
 	hubURL := flag.String("hub", envOr("SEE_SIZE_HUB_URL", "http://127.0.0.1:8080"), "SeeSize hub base URL")
-	token := flag.String("token", os.Getenv("SEE_SIZE_AGENT_TOKEN"), "Agent credential")
+	token := flag.String("token", "", "Agent credential (defaults to environment)")
 	tokenFile := flag.String("token-file", "", "read Agent credential from protected file")
 	agentID := flag.String("id", envOr("SEE_SIZE_AGENT_ID", defaultAgentID()), "stable Agent identifier")
 	interval := flag.Duration("interval", 10*time.Second, "heartbeat interval")
@@ -36,6 +37,7 @@ func main() {
 	scanLimit := flag.Int("scan-max-entries", 20000, "scan entry budget 1..100000")
 	scanRate := flag.Int("scan-rate", 1000, "metadata entries per second (1..100000)")
 	flag.Parse()
+	secretflag.Environment(flag.CommandLine, "token", token, os.Getenv, "SEE_SIZE_AGENT_TOKEN")
 	if *tokenFile != "" {
 		body, err := os.ReadFile(*tokenFile)
 		if err != nil {
