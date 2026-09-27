@@ -57,6 +57,15 @@ def main():
     root = raw.resolve(strict=True)
     if raw.is_symlink() or root in (Path('/'), Path.home()) or not (root/'data/seesize.db').is_file():
         raise SystemExit('refusing unrecognized application root')
+    # Shared with upgrade-prepare; keep the descriptor alive until process exit.
+    maintenance_lock = None
+    if args.apply:
+        import fcntl
+        lockpath=root/'.maintenance.lock'
+        if lockpath.is_symlink(): raise SystemExit('unsafe lock path')
+        maintenance_lock=lockpath.open('a')
+        try: fcntl.flock(maintenance_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise SystemExit('upgrade or maintenance active; retry later')
     entries = json.loads((root/'maintenance-artifacts.json').read_text())
     now = dt.datetime.now(dt.timezone.utc)
     targets = plan(root, entries, now)
