@@ -1,5 +1,7 @@
 # SeeSize
 
+当前用户服务部署可用 `scripts/deployment-check.py` 做只读前置检查，平台、权限、端口与服务状态检查及升级回退步骤见 [维护规程](docs/UPGRADE-RUNBOOK.md)。
+
 Windows 本地预览现在可用 `./scripts/preview-control.ps1 -Action Start|Stop|Status|Diagnose` 管理（执行时选择一个 Action），见 [转发维护手册](docs/PREVIEW-MAINTENANCE.md)。未配置登录自启。
 
 存储维护：7 天历史、7 份日常备份、3 个登记回退点、临时文件到期清理及容量检测，规则与边界见 [存储生命周期](docs/STORAGE-LIFECYCLE.md)。新增升级/演练产物必须登记，未知文件不自动删除。
