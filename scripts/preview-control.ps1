@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 param(
-    [ValidateSet('Start','Stop','Status','Diagnose','Run')][string]$Action='Status',
+    [ValidateSet('Start','Stop','Status','Diagnose','Run','EnableAutoStart','DisableAutoStart')][string]$Action='Status',
     [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_.-]*$')][string]$SshHost='wsrser',
     [ValidateRange(1024,65535)][int]$LocalPort=18082,
     [ValidateRange(1024,65535)][int]$RemotePort=18081
@@ -12,6 +12,16 @@ $stateFile=Join-Path $stateDir "$LocalPort.json"
 $logFile=Join-Path $stateDir "$LocalPort.log"
 $scriptFile=$PSCommandPath
 $forward="127.0.0.1:${LocalPort}:127.0.0.1:${RemotePort}"
+$autoStartKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$autoStartName="SeeSizePreview-$LocalPort"
+$pwshPath=(Get-Process -Id $PID).Path
+$autoStartCommand='"'+$pwshPath+'" -NoProfile -WindowStyle Hidden -File "'+$scriptFile+'" -Action Start -SshHost '+$SshHost+' -LocalPort '+$LocalPort+' -RemotePort '+$RemotePort
+function Read-AutoStart {
+    if(!(Test-Path -LiteralPath $autoStartKey)){return $null}
+    $entry=(Get-ItemProperty -LiteralPath $autoStartKey).PSObject.Properties[$autoStartName]
+    if($entry){return $entry.Value}
+    return $null
+}
 function Write-Event([string]$message) {
     $lines=@()
     if(Test-Path -LiteralPath $logFile){$lines=@(Get-Content -LiteralPath $logFile -Tail 199)}
@@ -26,6 +36,7 @@ function Match-Process($record,[bool]$worker) {
     $p=Get-Process -Id $record.id -ErrorAction SilentlyContinue
     if(!$p -or $p.StartTime.ToUniversalTime().Ticks.ToString() -ne $record.started){return $null}
     $info=Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)"
+    if(!$info -or !$info.CommandLine){return $null}
     if($worker){if(!$info.CommandLine.Contains($scriptFile) -or $info.CommandLine -notmatch '-Action\s+Run'){return $null}}
     else {if($info.Name -ne 'ssh.exe' -or !$info.CommandLine.Contains($record.forward)){return $null}}
     return $p
@@ -37,6 +48,21 @@ function Save-State($state) {
     [IO.File]::Move($temp,$stateFile,$true)
 }
 function Listener {return Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue}
+if($Action -in @('EnableAutoStart','DisableAutoStart')) {
+    $existing=Read-AutoStart
+    if($existing -and $existing -ne $autoStartCommand){throw 'Auto-start entry differs from these settings; refusing to overwrite or remove it.'}
+    if($Action -eq 'EnableAutoStart') {
+        if(!(Test-Path -LiteralPath $autoStartKey)){New-Item -Path $autoStartKey -Force | Out-Null}
+        New-ItemProperty -LiteralPath $autoStartKey -Name $autoStartName -Value $autoStartCommand -PropertyType String -Force | Out-Null
+        Write-Event 'Current-user login auto-start enabled; no credential stored.'
+        Write-Output 'Login auto-start enabled for this Windows user. Use Start for access now.'
+    }else{
+        if($existing){Remove-ItemProperty -LiteralPath $autoStartKey -Name $autoStartName}
+        Write-Event 'Current-user login auto-start disabled.'
+        Write-Output 'Login auto-start disabled; current forwarding process unchanged.'
+    }
+    exit
+}
 if($Action -eq 'Run') {
     # Exclusive lock prevents duplicate supervisors, including concurrent Start calls.
     try{$lock=[IO.File]::Open((Join-Path $stateDir "$LocalPort.lock"),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}catch{exit 2}
@@ -55,8 +81,12 @@ if($Action -eq 'Run') {
             $state.child=$null;Save-State $state
             Start-Sleep -Seconds 5
         }
+    }catch{
+        Write-Event "Supervisor error: $($_.Exception.Message)"
+        throw
     }finally{
         if($child -and !$child.HasExited){$child.Kill()}
+        Write-Event 'Supervisor exiting; shutdown or forced termination may bypass this record.'
         $lock.Dispose()
     }
     exit
@@ -94,8 +124,12 @@ if($Action -eq 'Start') {
 $listen=Listener
 $health='unreachable'
 try{$r=Invoke-WebRequest "http://127.0.0.1:$LocalPort/healthz" -TimeoutSec 3;$health="HTTP $($r.StatusCode)"}catch{}
-[pscustomobject]@{Managed=[bool]$worker;Listening=[bool]$listen;Health=$health;SavedHost=$state.host;SavedRemotePort=$state.remote_port;Log=$logFile}
+$autoStart=Read-AutoStart
+$boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+$priorBoot=if($state -and $state.worker){[long]$state.worker.started -lt $boot.ToUniversalTime().Ticks}else{$false}
+[pscustomobject]@{Managed=[bool]$worker;Listening=[bool]$listen;Health=$health;SavedHost=$state.host;SavedRemotePort=$state.remote_port;AutoStartConfigured=[bool]$autoStart;AutoStartMatches=($autoStart -eq $autoStartCommand);LastBoot=$boot;StatePredatesBoot=$priorBoot;Log=$logFile}
 if($Action -eq 'Diagnose') {
+    if(!$worker -and $priorBoot){Write-Output 'Saved supervisor predates Windows boot. Previous process ended at shutdown; Start is needed unless login auto-start launches it.'}
     if($listen){$listen | Select-Object LocalAddress,LocalPort,OwningProcess}
     if(Test-Path -LiteralPath $logFile){Get-Content -LiteralPath $logFile -Tail 20}
     Write-Output 'Read-only remote connectivity check:'
