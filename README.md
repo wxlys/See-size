@@ -1,5 +1,7 @@
 # SeeSize
 
+**版本收尾入口：[交付说明与验收总表](docs/DELIVERY.md)、[演示与维护交接](docs/HANDOFF-CHECKLIST.md)。** 更新于 2026-09-28：核心功能与本轮上线交互通过，真实 Windows 重启登录自启仍待验证。
+
 当前用户服务部署可用 `scripts/deployment-check.py` 做只读前置检查，平台、权限、端口与服务状态检查及升级回退步骤见 [维护规程](docs/UPGRADE-RUNBOOK.md)。
 
 Windows 本地预览可用 `./scripts/preview-control.ps1 -Action Start|Stop|Status|Diagnose` 管理（执行时选择一个 Action），并可用 `EnableAutoStart|DisableAutoStart` 管理当前用户登录自启，见 [转发维护手册](docs/PREVIEW-MAINTENANCE.md)。自启需要显式启用，不随克隆仓库自动安装。
@@ -16,7 +18,7 @@ Windows 本地预览可用 `./scripts/preview-control.ps1 -Action Start|Stop|Sta
 
 SeeSize 是一个面向个人开发者和小型服务器集群的轻量资源监控与磁盘异常定位系统。
 
-当前仓库包含第一个纵向原型：
+当前仓库包含核心实现：
 
 - `seesize-hub`：接收 Agent 心跳，持久化历史指标，并提供内嵌 Web 总览与趋势图。
 - `seesize-agent`：采集主机信息和基础资源指标并主动上报。
