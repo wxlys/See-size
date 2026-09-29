@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""SeeSize Ubuntu/Debian amd64 agent installer. No silent upgrades."""
+import argparse
+import getpass
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+
+ROOT = Path('/opt/seesize-agent')
+DATA = Path('/var/lib/seesize-agent')
+UNIT = Path('/etc/systemd/system/seesize-agent.service')
+ACCOUNT = 'seesize-agent'
+REPO = 'https://github.com/wxlys/See-size/releases/download/'
+COMPONENTS = ('seesize-agent-linux-amd64', 'seesize-enroll-linux-amd64')
+MAX_BINARY = 64 * 1024 * 1024
+
+def version(value):
+    if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', value):
+        raise ValueError('Expected explicit release version such as v0.1.0')
+    return value
+
+def hub_url(value):
+    u = urllib.parse.urlsplit(value)
+    if u.scheme != 'https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('', '/'):
+        raise ValueError('Hub must be an HTTPS origin without credentials, query or path')
+    # Restrict to literal ASCII URL characters safe in systemd ExecStart.
+    if not re.fullmatch(r'https://[A-Za-z0-9.\-\[\]:]+/?', value):
+        raise ValueError('Invalid Hub URL')
+    try:
+        if u.port is not None and not 1 <= u.port <= 65535: raise ValueError('port')
+    except ValueError:
+        raise ValueError('Invalid HTTPS port')
+    return value.rstrip('/')
+
+def device_id(value):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value):
+        raise ValueError('Use 1..128 letters, digits, dot, underscore or hyphen for device ID')
+    return value
+
+def manifest(body, requested):
+    m = json.loads(body)
+    if m.get('schema') != 1 or m.get('version') != version(requested) or m.get('platform') != 'linux-amd64':
+        raise ValueError('Release metadata version/platform mismatch')
+    if set(m.get('sha256', {})) != set(COMPONENTS):
+        raise ValueError('Release must contain agent and enrollment hashes')
+    if any(not isinstance(h,str) or not re.fullmatch('[0-9a-f]{64}', h) for h in m['sha256'].values()):
+        raise ValueError('Invalid SHA256')
+    if not isinstance(m.get('hub_requirement'), str) or not m['hub_requirement']:
+        raise ValueError('Missing Hub compatibility statement')
+    return m
+
+class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != 'https':
+            raise ValueError('Refusing HTTPS downgrade')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def fetch(url, limit):
+    if urllib.parse.urlsplit(url).scheme != 'https': raise ValueError('HTTPS required')
+    with urllib.request.build_opener(HTTPSRedirect()).open(url, timeout=60) as response:
+        body = response.read(limit + 1)
+    if len(body) > limit: raise ValueError('Download exceeds size limit')
+    return body
+
+def validate_binary(body, expected):
+    if len(body) < 20 or body[:6] != b'\x7fELF\x02\x01' or int.from_bytes(body[18:20], 'little') != 62:
+        raise ValueError('Not a Linux amd64 ELF binary')
+    if hashlib.sha256(body).hexdigest() != expected: raise ValueError('SHA256 mismatch')
+
+def run(*args, **kwargs):
+    return subprocess.run(args, check=True, timeout=60, **kwargs)
+
+def preflight():
+    if os.geteuid() != 0: raise ValueError('Run installation with sudo; no sudo password is collected by this tool')
+    if platform.system() != 'Linux' or platform.machine() != 'x86_64': raise ValueError('Linux x86_64 required')
+    osinfo = Path('/etc/os-release').read_text()
+    if not re.search(r'^ID="?(ubuntu|debian)"?$', osinfo, re.M): raise ValueError('Only Ubuntu/Debian supported')
+    for command in ('systemctl', 'useradd', 'runuser'):
+        if not shutil.which(command): raise ValueError('Required system command missing: ' + command)
+    if shutil.disk_usage('/opt').free < 512 * 1024**2: raise ValueError('At least 512 MiB free required')
+
+def install(args):
+    preflight()
+    if not sys.stdin.isatty(): raise ValueError('Use a downloaded script in an interactive terminal, not a pipe')
+    os.umask(0o022)
+    for path in (ROOT, DATA, UNIT):
+        if path.exists() or path.is_symlink(): raise ValueError('Existing installation/path; refusing overwrite: ' + str(path))
+    state = run('systemctl', 'show', UNIT.name, '--property=LoadState', '--value', capture_output=True, text=True).stdout.strip()
+    if state != 'not-found': raise ValueError('Existing service; refusing takeover')
+    try: pwd.getpwnam(ACCOUNT)
+    except KeyError: pass
+    else: raise ValueError('Service account already exists; refusing reuse')
+    release = version(args.version)
+    # All downloads and verification precede registration and system changes.
+    with tempfile.TemporaryDirectory(prefix='seesize-install-') as scratch:
+        staged = Path(scratch)
+        if args.bundle:
+            source = Path(args.bundle).resolve(strict=True)
+            raw = (source/'agent-release.json').read_bytes()
+        else:
+            raw = fetch(REPO + release + '/agent-release.json', 64 * 1024)
+        m = manifest(raw, release)
+        for name in COMPONENTS:
+            body = (source/name).read_bytes() if args.bundle else fetch(REPO + release + '/' + name, MAX_BINARY)
+            if len(body) > MAX_BINARY: raise ValueError('Binary too large')
+            validate_binary(body, m['sha256'][name])
+            (staged/name).write_bytes(body)
+        hub = hub_url(input('Hub HTTPS address: ').strip())
+        identity = device_id(input('Device ID: ').strip())
+        print('Hub compatibility requirement: ' + ascii(m['hub_requirement']))
+        print('This installer cannot automatically determine the running Hub version.')
+        if input('Confirm administrator verified compatibility; type install: ').strip() != 'install':
+            raise ValueError('Cancelled; no system changes')
+        # Successful response is only connectivity, not a compatibility guarantee.
+        health = json.loads(fetch(hub + '/healthz', 4096))
+        if health.get('status') != 'ok': raise ValueError('Hub health check failed')
+        run('useradd', '--system', '--user-group', '--home-dir', str(DATA), '--no-create-home', '--shell', '/usr/sbin/nologin', ACCOUNT)
+        account = pwd.getpwnam(ACCOUNT)
+        ROOT.mkdir(mode=0o755)
+        DATA.mkdir(mode=0o700)
+        os.chown(DATA, account.pw_uid, account.pw_gid)
+        for name in COMPONENTS:
+            shutil.copyfile(staged/name, ROOT/name)
+            (ROOT/name).chmod(0o755)
+        (ROOT/'agent-release.json').write_bytes(raw)
+        (ROOT/'connection.json').write_text(json.dumps({'hub':hub, 'id':identity}))
+        shutil.copyfile(Path(__file__).resolve(), ROOT/'agent-setup.py')
+    print('Programs installed. Starting registration; on failure use the register action to retry.')
+    register()
+
+def register():
+    preflight()
+    # Refuse unowned installer paths and symlink substitutions.
+    for path in (ROOT, ROOT/'connection.json', ROOT/'agent-release.json', *[ROOT/n for n in COMPONENTS]):
+        if path.is_symlink() or path.stat().st_uid != 0 or path.stat().st_mode & 0o022:
+            raise ValueError('Unsafe installer path: ' + str(path))
+    connection = json.loads((ROOT/'connection.json').read_text())
+    hub, identity = hub_url(connection['hub']), device_id(connection['id'])
+    saved = json.loads((ROOT/'agent-release.json').read_text())
+    m = manifest(json.dumps(saved), saved['version'])
+    for name in COMPONENTS: validate_binary((ROOT/name).read_bytes(), m['sha256'][name])
+    account = pwd.getpwnam(ACCOUNT)
+    if DATA.is_symlink() or DATA.stat().st_uid != account.pw_uid or DATA.stat().st_mode & 0o077:
+        raise ValueError('Unsafe credential directory')
+    if UNIT.exists() or UNIT.is_symlink(): raise ValueError('Service already configured; use status, not register')
+    token = DATA/'agent.token'
+    if token.is_symlink(): raise ValueError('Credential symlink refused')
+    if token.exists() and token.stat().st_size == 0:
+        # Only the enrollment tool's empty reservation, never a valid credential.
+        token.unlink()
+    if not token.exists():
+        if not sys.stdin.isatty(): raise ValueError('Interactive terminal required for hidden registration code')
+        code = getpass.getpass('One-time registration code (hidden): ').strip()
+        if not code: raise ValueError('Empty registration code')
+        env = {k:v for k,v in os.environ.items() if not k.startswith('SEE_SIZE_')}
+        env['SEE_SIZE_ENROLL_CODE'] = code
+        result = subprocess.run(['runuser','-u',ACCOUNT,'--',str(ROOT/COMPONENTS[1]),'-hub',hub,'-id',identity,'-out',str(token)],env=env,capture_output=True,timeout=30)
+        env.pop('SEE_SIZE_ENROLL_CODE', None)
+        code = ''
+        if result.returncode:
+            raise ValueError('Registration failed. Verify URL/ID, generate a fresh code and retry register. Installed files retained; credential/code not printed.')
+    if not token.is_file() or not token.stat().st_size or token.stat().st_uid != account.pw_uid or token.stat().st_mode & 0o077:
+        raise ValueError('Invalid credential file')
+    unit = ('[Unit]\nDescription=SeeSize managed agent\nWants=network-online.target\nAfter=network-online.target\n'
+            '[Service]\nType=simple\nUser='+ACCOUNT+'\nGroup='+ACCOUNT+'\n'
+            'ExecStart='+str(ROOT/COMPONENTS[0])+' -hub '+hub+' -id '+identity+' -token-file '+str(token)+' -interval 10s\n'
+            'Restart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\n'
+            '[Install]\nWantedBy=multi-user.target\n')
+    with UNIT.open('x') as stream: stream.write(unit)
+    run('systemctl','daemon-reload')
+    run('systemctl','enable','--now',UNIT.name)
+    print('Registered; service enabled and start requested. Confirm device online in Hub; service start alone is not acceptance.')
+
+def check_update(args):
+    current = json.loads((ROOT/'agent-release.json').read_text())
+    target = version(args.version)
+    m = manifest(fetch(REPO+target+'/agent-release.json',64*1024),target)
+    print('Installed package: '+version(current['version']))
+    print('Requested package: '+m['version'])
+    print('Hub compatibility: '+ascii(m['hub_requirement']))
+    print('Same package version.' if target==current['version'] else 'Different package version (not necessarily newer).')
+    print('Read-only check. No replacement, restart or automatic/forced update. Guided upgrade is not implemented yet.')
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('install','register','check-update'))
+    parser.add_argument('--version', help='explicit GitHub release tag')
+    parser.add_argument('--bundle', help='trusted local release directory for offline validation')
+    args = parser.parse_args()
+    if args.action in ('install','check-update') and not args.version: parser.error('--version required')
+    if args.action=='install': install(args)
+    elif args.action=='register': register()
+    else: check_update(args)
+
+if __name__=='__main__':
+    try: main()
+    except (ValueError,OSError,subprocess.SubprocessError) as error:
+        raise SystemExit(str(error))
