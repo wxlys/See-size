@@ -2,7 +2,7 @@
 
 采集功能与页面维持稳定基线；新增安装器处于开发阶段，尚未发布一键安装/升级版本，见 [采集端安装交付进度](docs/AGENT-INSTALLER.md)。
 
-**版本收尾入口：[交付说明与验收总表](docs/DELIVERY.md)、[演示与维护交接](docs/HANDOFF-CHECKLIST.md)。** 更新于 2026-09-28：核心功能与本轮上线交互通过，真实 Windows 重启登录自启仍待验证。
+**版本收尾入口：[交付说明与验收总表](docs/DELIVERY.md)、[演示与维护交接](docs/HANDOFF-CHECKLIST.md)。** 更新于 2026-09-29：核心功能与本轮上线交互通过；用户反馈电脑重启后公网 HTTPS 与本地 18082 均可访问。
 
 当前用户服务部署可用 `scripts/deployment-check.py` 做只读前置检查，平台、权限、端口与服务状态检查及升级回退步骤见 [维护规程](docs/UPGRADE-RUNBOOK.md)。
 

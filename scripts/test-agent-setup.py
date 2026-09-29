@@ -45,7 +45,28 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'agent-release.json').write_text(json.dumps(data))
             with patch.object(m,'ROOT',root),patch.object(m,'fetch',return_value=json.dumps(data).encode()),patch.object(m,'run') as run:
-                m.check_update(types.SimpleNamespace(version='v0.1.0'))
+                m.check_update(types.SimpleNamespace(version='v0.1.0',bundle=None))
                 run.assert_not_called()
+    def test_atomic_copy(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            source=Path(d)/'source'; dest=Path(d)/'destination'
+            source.write_bytes(b'new');dest.write_bytes(b'old')
+            m.atomic_copy(source,dest)
+            self.assertEqual(dest.read_bytes(),b'new')
+            self.assertFalse(list(Path(d).glob('.replace-*')))
+    def test_workspace_retention(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d,patch.object(m,'ROOT',Path(d)):
+            with m.update_workspace() as work:
+                (work/'file').write_text('cancelled preparation')
+            self.assertFalse(work.exists())
+            with self.assertRaises(RuntimeError):
+                with m.update_workspace() as retained:
+                    (retained/'restore-required').write_text('keep')
+                    raise RuntimeError('simulated restore failure')
+            self.assertTrue(retained.exists())
+            with self.assertRaises(ValueError):
+                with m.update_workspace():pass
 
 if __name__=='__main__':unittest.main()

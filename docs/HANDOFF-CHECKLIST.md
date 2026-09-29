@@ -9,7 +9,7 @@ cd 'F:\procedure\codex\program\See-size'
 
 预期 Managed=True、Listening=True、Health=HTTP 200。没有连接时执行 Start，异常时 Diagnose。浏览器打开 http://127.0.0.1:18082/，使用已有管理凭据，不把凭据放入截图、录像或论文。
 
-当前用户已启用登录自启。下次正常重启登录后，在没有手动 Start 的前提下检查 Status 和页面，成功后补录实际自启验收；不必专门重启，更不要重启云服务器。
+当前用户已启用登录自启。2026-09-29 用户反馈电脑重启后 18082 可访问，已补录用户验收；无需为此重启云服务器。
 
 ## 5—8 分钟演示顺序
 
@@ -42,7 +42,7 @@ ssh wsrser "systemctl --user show seesize-backup.service seesize-maintenance.ser
 ## 交接结论
 
 - 已确认核心功能、本轮浏览器交互、线上自动检查、转发恢复。
-- 待自然事件验证：Windows 重启登录自启。
+- Windows 重启后本地入口：2026-09-29 用户反馈通过。
 - 不扩展公网部署、额外业务主机常驻、规模上限；论文和答辩材料另行准备。
 - 不在收尾时盲删回退点；服务器按登记策略轮换，本地实验材料保留为证据。
 

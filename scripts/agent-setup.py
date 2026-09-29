@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SeeSize Ubuntu/Debian amd64 agent installer. No silent upgrades."""
 import argparse
+from contextlib import contextmanager
 import getpass
 import hashlib
 import json
@@ -10,9 +11,11 @@ import platform
 import pwd
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 
@@ -184,23 +187,152 @@ def register():
 def check_update(args):
     current = json.loads((ROOT/'agent-release.json').read_text())
     target = version(args.version)
-    m = manifest(fetch(REPO+target+'/agent-release.json',64*1024),target)
+    raw = (Path(args.bundle)/'agent-release.json').read_bytes() if args.bundle else fetch(REPO+target+'/agent-release.json',64*1024)
+    m = manifest(raw,target)
     print('Installed package: '+version(current['version']))
     print('Requested package: '+m['version'])
     print('Hub compatibility: '+ascii(m['hub_requirement']))
     print('Same package version.' if target==current['version'] else 'Different package version (not necessarily newer).')
-    print('Read-only check. No replacement, restart or automatic/forced update. Guided upgrade is not implemented yet.')
+    print('Read-only check. Use update with an explicit target and type update to confirm. No automatic/forced update.')
+
+def atomic_copy(source, destination):
+    fd, name = tempfile.mkstemp(prefix='.replace-', dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.chmod(0o755 if destination.name in COMPONENTS else 0o644)
+        with temporary.open('r+b') as stream: os.fsync(stream.fileno())
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+def validate_rollback(path, names):
+    if not path.exists() and not path.is_symlink(): return
+    if path.is_symlink() or not path.is_dir() or path.stat().st_uid != 0:
+        raise ValueError('Unsafe rollback directory')
+    if {p.name for p in path.iterdir()} != set(names): raise ValueError('Unexpected rollback contents; inspect manually')
+    for p in path.iterdir():
+        if p.is_symlink() or not p.is_file() or p.stat().st_uid != 0:
+            raise ValueError('Unsafe rollback file')
+
+@contextmanager
+def update_workspace():
+    if any(ROOT.glob('.update-*')):
+        raise ValueError('Interrupted update workspace exists; inspect recovery files before retrying')
+    work = Path(tempfile.mkdtemp(prefix='.update-', dir=ROOT))
+    try:
+        yield work
+    finally:
+        if (work/'restore-required').exists():
+            print('Recovery files retained for inspection: '+str(work), file=sys.stderr)
+        else:
+            shutil.rmtree(work)
+
+def update(args):
+    preflight()
+    if not sys.stdin.isatty(): raise ValueError('Interactive confirmation required')
+    os.umask(0o022)
+    names = (*COMPONENTS, 'agent-release.json', 'agent-setup.py')
+    for path in (ROOT, UNIT, ROOT/'connection.json', *[ROOT/n for n in names]):
+        if path.is_symlink() or path.stat().st_uid != 0 or path.stat().st_mode & 0o022:
+            raise ValueError('Unsafe installed path: ' + str(path))
+    current = json.loads((ROOT/'agent-release.json').read_text())
+    current = manifest(json.dumps(current), current['version'])
+    for name in COMPONENTS: validate_binary((ROOT/name).read_bytes(), current['sha256'][name])
+    connection = json.loads((ROOT/'connection.json').read_text())
+    hub, identity = hub_url(connection['hub']), device_id(connection['id'])
+    token = DATA/'agent.token'
+    account = pwd.getpwnam(ACCOUNT)
+    for path in (DATA, token):
+        if path.is_symlink() or path.stat().st_uid != account.pw_uid or path.stat().st_mode & 0o077:
+            raise ValueError('Unsafe credential path')
+    if not token.is_file() or not token.stat().st_size: raise ValueError('Missing credential')
+    expected_args = [str(ROOT/COMPONENTS[0]), '-hub', hub, '-id', identity, '-token-file', str(token), '-interval', '10s']
+    starts = [line[len('ExecStart='):] for line in UNIT.read_text().splitlines() if line.startswith('ExecStart=')]
+    if len(starts) != 1 or shlex.split(starts[0]) != expected_args:
+        raise ValueError('Custom service arguments require manual upgrade')
+    if run('systemctl','show',UNIT.name,'-p','DropInPaths','--value',capture_output=True,text=True).stdout.strip():
+        raise ValueError('Service overrides require manual upgrade')
+    state = run('systemctl','show',UNIT.name,'-p','ActiveState','--value',capture_output=True,text=True).stdout.strip()
+    if state != 'active': raise ValueError('Start and verify existing service before updating')
+    rollback = ROOT/'rollback'
+    validate_rollback(rollback, names)
+    target = version(args.version)
+    if target == current['version']: raise ValueError('Already this package version; no replacement')
+    with update_workspace() as work:
+        candidate = work/'candidate'; candidate.mkdir()
+        previous = work/'previous'; previous.mkdir()
+        raw = (Path(args.bundle)/'agent-release.json').read_bytes() if args.bundle else fetch(REPO+target+'/agent-release.json',64*1024)
+        desired = manifest(raw,target)
+        for name in COMPONENTS:
+            body = (Path(args.bundle)/name).read_bytes() if args.bundle else fetch(REPO+target+'/'+name,MAX_BINARY)
+            if len(body)>MAX_BINARY: raise ValueError('Binary too large')
+            validate_binary(body,desired['sha256'][name])
+            (candidate/name).write_bytes(body)
+        (candidate/'agent-release.json').write_bytes(raw)
+        # The reviewed updater used for this invocation becomes the installed tool.
+        shutil.copyfile(Path(__file__).resolve(),candidate/'agent-setup.py')
+        print('Agent package: '+current['version']+' -> '+target)
+        print('Hub requirement: '+ascii(desired['hub_requirement']))
+        print('Verify this Hub requirement with your administrator; automatic compatibility detection is not available.')
+        print('This may be a downgrade. Hub is NOT updated. Device configuration/credential and boot enablement are preserved.')
+        if input('Type update to accept the requirement and replace this Agent; Enter cancels: ').strip()!='update':
+            print('Cancelled; running service unchanged.'); return
+        for name in names: shutil.copyfile(ROOT/name,previous/name)
+        unchanged = {p:hashlib.sha256(p.read_bytes()).digest() for p in (UNIT,ROOT/'connection.json',token)}
+        def verify_running():
+            # The exact installed agent sends one real heartbeat with existing credentials.
+            # No -k, no re-enrollment, no management credential on the monitored host.
+            probe = subprocess.run(['runuser','-u',ACCOUNT,'--',*expected_args,'-once'],capture_output=True,timeout=30)
+            if probe.returncode: raise ValueError('Agent heartbeat probe failed')
+            time.sleep(2)
+            if run('systemctl','show',UNIT.name,'-p','ActiveState','--value',capture_output=True,text=True).stdout.strip()!='active':
+                raise ValueError('Agent service not active')
+            if any(hashlib.sha256(p.read_bytes()).digest()!=h for p,h in unchanged.items()):
+                raise ValueError('Protected configuration changed')
+        # Stop before any replacement. Rollback restores the complete old file set.
+        recovery_marker = work/'restore-required'
+        recovery_marker.write_text('Keep previous/ until successful update or verified rollback.\n')
+        run('systemctl','stop',UNIT.name)
+        try:
+            for name in names: atomic_copy(candidate/name,ROOT/name)
+            run('systemctl','start',UNIT.name)
+            verify_running()
+        except (Exception,KeyboardInterrupt):
+            run('systemctl','stop',UNIT.name)
+            for name in names: atomic_copy(previous/name,ROOT/name)
+            run('systemctl','start',UNIT.name)
+            try: verify_running()
+            except Exception:
+                raise ValueError('Old files restored, but heartbeat verification failed; check network and service. No database or credential was restored.')
+            recovery_marker.unlink()
+            raise ValueError('Update failed; old package restored and heartbeat verified')
+        # Bounded retention: one prior package only, no credentials in rollback.
+        validate_rollback(rollback,names)
+        if rollback.exists(): shutil.rmtree(rollback)
+        previous.replace(rollback)
+        recovery_marker.unlink()
+        print('Update passed: heartbeat accepted; previous package retained in '+str(rollback))
+        print('Confirm continuous sampling in Hub. Short probe is not long-running acceptance.')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('install','register','check-update'))
+    parser.add_argument('action', choices=('install','register','check-update','update'))
     parser.add_argument('--version', help='explicit GitHub release tag')
     parser.add_argument('--bundle', help='trusted local release directory for offline validation')
     args = parser.parse_args()
-    if args.action in ('install','check-update') and not args.version: parser.error('--version required')
-    if args.action=='install': install(args)
-    elif args.action=='register': register()
-    else: check_update(args)
+    if args.action in ('install','check-update','update') and not args.version: parser.error('--version required')
+    if args.action=='check-update': check_update(args); return
+    preflight()
+    import fcntl
+    fd = os.open('/run/lock/seesize-agent-setup.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as lock:
+        if os.fstat(lock.fileno()).st_uid!=0: raise ValueError('Unsafe lock owner')
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        if args.action=='install': install(args)
+        elif args.action=='register': register()
+        else: update(args)
 
 if __name__=='__main__':
     try: main()
