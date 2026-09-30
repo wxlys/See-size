@@ -18,6 +18,10 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
+import http.client
+import signal
+import ssl
 
 ROOT = Path('/opt/seesize-agent')
 DATA = Path('/var/lib/seesize-agent')
@@ -26,6 +30,28 @@ ACCOUNT = 'seesize-agent'
 REPO = 'https://github.com/wxlys/See-size/releases/download/'
 COMPONENTS = ('seesize-agent-linux-amd64', 'seesize-enroll-linux-amd64')
 MAX_BINARY = 64 * 1024 * 1024
+DOWNLOAD_SECONDS = 180
+DOWNLOAD_ATTEMPTS = 3
+
+class DownloadDeadline(ValueError):
+    pass
+
+@contextmanager
+def download_deadline(seconds):
+    # Installer runs in the main thread on Linux. Interrupt even DNS/slow reads.
+    if not hasattr(signal, 'setitimer'):
+        yield  # Non-Linux unit tests; Linux is the supported installation target.
+        return
+    def expired(signum, frame):
+        raise DownloadDeadline('Download total time limit reached; retry later or use a trusted --bundle')
+    previous = signal.signal(signal.SIGALRM, expired)
+    timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if timer[0]: signal.setitimer(signal.ITIMER_REAL, *timer)
 
 def version(value):
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', value):
@@ -70,10 +96,46 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
 
 def fetch(url, limit):
     if urllib.parse.urlsplit(url).scheme != 'https': raise ValueError('HTTPS required')
-    with urllib.request.build_opener(HTTPSRedirect()).open(url, timeout=60) as response:
-        body = response.read(limit + 1)
-    if len(body) > limit: raise ValueError('Download exceeds size limit')
-    return body
+    # Do not print URLs, redirect query strings or raw exceptions (may contain secrets).
+    print(f'Downloading HTTPS resource (limit {limit} bytes; total budget {DOWNLOAD_SECONDS}s).', flush=True)
+    with download_deadline(DOWNLOAD_SECONDS):
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            print(f'Connecting: attempt {attempt}/{DOWNLOAD_ATTEMPTS}; Ctrl+C cancels.', flush=True)
+            try:
+                with urllib.request.build_opener(HTTPSRedirect()).open(url, timeout=15) as response:
+                    length = response.headers.get('Content-Length')
+                    total = int(length) if length is not None else None
+                    if total is not None and (total < 0 or total > limit):
+                        raise ValueError('Download exceeds size limit or invalid Content-Length')
+                    body = bytearray()
+                    last = started = time.monotonic()
+                    while True:
+                        chunk = response.read1(min(64 * 1024, limit + 1 - len(body)))
+                        if not chunk: break
+                        body.extend(chunk)
+                        if len(body) > limit: raise ValueError('Download exceeds size limit')
+                        now = time.monotonic()
+                        if now - last >= 2:
+                            print(f'Downloaded {len(body)}/{total if total is not None else "unknown"} bytes; {len(body)/max(now-started,0.001):.0f} B/s', flush=True)
+                            last = now
+                    if total is not None and len(body) != total:
+                        raise http.client.IncompleteRead(bytes(body))
+                    print(f'Download complete: {len(body)} bytes.', flush=True)
+                    return bytes(body)
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code not in (408,429,500,502,503,504):
+                    raise ValueError(f'Download rejected: HTTP {error.code}; check release availability') from None
+                reason = f'HTTP {error.code}'
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+                cause = getattr(error, 'reason', error)
+                if isinstance(cause, ssl.SSLCertVerificationError):
+                    raise ValueError('TLS certificate verification failed; not bypassed') from None
+                reason = 'network interruption or read timeout'
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise ValueError('Download failed after limited retries; retry later or use a trusted --bundle')
+            print(f'{reason}; retrying from zero in 2s.', flush=True)
+            time.sleep(2)
 
 def validate_binary(body, expected):
     if len(body) < 20 or body[:6] != b'\x7fELF\x02\x01' or int.from_bytes(body[18:20], 'little') != 62:
@@ -336,5 +398,7 @@ def main():
 
 if __name__=='__main__':
     try: main()
+    except KeyboardInterrupt:
+        raise SystemExit('Cancelled. Download preparation does not stop the existing Agent. If replacement had started, inspect service status and any retained recovery directory.')
     except (ValueError,OSError,subprocess.SubprocessError) as error:
         raise SystemExit(str(error))

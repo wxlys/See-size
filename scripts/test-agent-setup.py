@@ -1,17 +1,58 @@
 import importlib.util
 import hashlib
+import io
 import json
 from pathlib import Path
 import sys
 import types
 import unittest
 from unittest.mock import patch
+from unittest.mock import MagicMock
 
 if sys.platform=='win32': sys.modules.setdefault('pwd',types.SimpleNamespace())
 spec=importlib.util.spec_from_file_location('setup',Path(__file__).with_name('agent-setup.py'))
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class InstallerTests(unittest.TestCase):
+    def response(self, chunks, length=None):
+        response=MagicMock()
+        response.__enter__.return_value=response
+        response.headers={} if length is None else {'Content-Length':str(length)}
+        response.read1.side_effect=chunks
+        return response
+    def test_chunked_download(self):
+        response=self.response([b'ab',b'cd',b''],4)
+        with patch.object(m.urllib.request,'build_opener') as opener:
+            opener.return_value.open.return_value=response
+            self.assertEqual(m.fetch('https://example.com/file',10),b'abcd')
+    def test_retry_bounded(self):
+        with patch.object(m.urllib.request,'build_opener') as opener,patch.object(m.time,'sleep'):
+            opener.return_value.open.side_effect=ConnectionResetError()
+            with self.assertRaisesRegex(ValueError,'limited retries'):m.fetch('https://example.com/file',10)
+            self.assertEqual(opener.return_value.open.call_count,3)
+    def test_partial_retry_starts_over(self):
+        with patch.object(m.urllib.request,'build_opener') as opener,patch.object(m.time,'sleep'):
+            opener.return_value.open.side_effect=[self.response([b'a',b''],2),self.response([b'bc',b''],2)]
+            self.assertEqual(m.fetch('https://example.com/file',10),b'bc')
+    def test_oversize_not_retried(self):
+        with patch.object(m.urllib.request,'build_opener') as opener:
+            opener.return_value.open.return_value=self.response([b'123',b''])
+            with self.assertRaisesRegex(ValueError,'size limit'):m.fetch('https://example.com/file',2)
+            self.assertEqual(opener.return_value.open.call_count,1)
+    def test_404_not_retried(self):
+        with patch.object(m.urllib.request,'build_opener') as opener:
+            opener.return_value.open.side_effect=m.urllib.error.HTTPError('https://example.com',404,'missing',{},io.BytesIO())
+            with self.assertRaisesRegex(ValueError,'HTTP 404'):m.fetch('https://example.com/file',10)
+            self.assertEqual(opener.return_value.open.call_count,1)
+    def test_cancel_not_retried(self):
+        with patch.object(m.urllib.request,'build_opener') as opener:
+            opener.return_value.open.side_effect=KeyboardInterrupt()
+            with self.assertRaises(KeyboardInterrupt):m.fetch('https://example.com/file',10)
+            self.assertEqual(opener.return_value.open.call_count,1)
+    @unittest.skipUnless(hasattr(m.signal,'setitimer'),'Linux deadline integration')
+    def test_deadline_interrupts_blocking_wait(self):
+        with self.assertRaises(m.DownloadDeadline):
+            with m.download_deadline(0.02):m.time.sleep(1)
     def test_https(self):
         self.assertEqual(m.hub_url('https://8.148.5.169/'),'https://8.148.5.169')
         self.assertEqual(m.hub_url('https://example.com:443'),'https://example.com:443')
