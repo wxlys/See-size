@@ -32,6 +32,58 @@ COMPONENTS = ('seesize-agent-linux-amd64', 'seesize-enroll-linux-amd64')
 MAX_BINARY = 64 * 1024 * 1024
 DOWNLOAD_SECONDS = 180
 DOWNLOAD_ATTEMPTS = 3
+CACHE = Path('/var/cache/seesize-agent-downloads')
+CACHE_DAYS = 7
+
+def download_seconds(value):
+    seconds = int(value)
+    if not 30 <= seconds <= 3600:
+        raise argparse.ArgumentTypeError('Download budget must be 30..3600 seconds per resource')
+    return seconds
+
+def prepare_cache():
+    # Fixed root-owned location; no configurable deletion target or recursive deletion.
+    for parent in (CACHE.parent.parent, CACHE.parent):
+        if parent.is_symlink() or not parent.is_dir() or parent.stat().st_uid != 0 or parent.stat().st_mode & 0o022:
+            raise ValueError('Unsafe download cache parent')
+    CACHE.mkdir(mode=0o700, exist_ok=True)
+    if CACHE.is_symlink() or not CACHE.is_dir() or CACHE.stat().st_uid != 0 or CACHE.stat().st_mode & 0o077:
+        raise ValueError('Unsafe download cache directory')
+    allowed = set(COMPONENTS) | {'.partial'}
+    entries = list(CACHE.iterdir())
+    for path in entries:
+        if path.name not in allowed or path.is_symlink() or not path.is_file() or path.stat().st_uid != 0 or path.stat().st_mode & 0o077:
+            raise ValueError('Unexpected or unsafe download cache contents; inspect manually')
+    for path in entries:
+        if path.name == '.partial' or time.time() - path.stat().st_mtime > CACHE_DAYS * 86400 or path.stat().st_size > MAX_BINARY:
+            path.unlink()
+
+def release_binary(release, name, expected):
+    if name not in COMPONENTS: raise ValueError('Unknown release component')
+    prepare_cache()
+    path = CACHE/name
+    if path.exists():
+        body = path.read_bytes()
+        try: validate_binary(body, expected)
+        except ValueError:
+            path.unlink()  # Only this recognized cache slot, never installed files.
+        else:
+            print('Using verified download cache: '+name, flush=True)
+            return body
+    print('Release component: '+name, flush=True)
+    body = fetch(REPO+release+'/'+name, MAX_BINARY)
+    validate_binary(body, expected)
+    temporary = CACHE/'.partial'
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return body
 
 class DownloadDeadline(ValueError):
     pass
@@ -176,7 +228,7 @@ def install(args):
             raw = fetch(REPO + release + '/agent-release.json', 64 * 1024)
         m = manifest(raw, release)
         for name in COMPONENTS:
-            body = (source/name).read_bytes() if args.bundle else fetch(REPO + release + '/' + name, MAX_BINARY)
+            body = (source/name).read_bytes() if args.bundle else release_binary(release, name, m['sha256'][name])
             if len(body) > MAX_BINARY: raise ValueError('Binary too large')
             validate_binary(body, m['sha256'][name])
             (staged/name).write_bytes(body)
@@ -328,7 +380,7 @@ def update(args):
         raw = (Path(args.bundle)/'agent-release.json').read_bytes() if args.bundle else fetch(REPO+target+'/agent-release.json',64*1024)
         desired = manifest(raw,target)
         for name in COMPONENTS:
-            body = (Path(args.bundle)/name).read_bytes() if args.bundle else fetch(REPO+target+'/'+name,MAX_BINARY)
+            body = (Path(args.bundle)/name).read_bytes() if args.bundle else release_binary(target, name, desired['sha256'][name])
             if len(body)>MAX_BINARY: raise ValueError('Binary too large')
             validate_binary(body,desired['sha256'][name])
             (candidate/name).write_bytes(body)
@@ -379,11 +431,15 @@ def update(args):
         print('Confirm continuous sampling in Hub. Short probe is not long-running acceptance.')
 
 def main():
+    global DOWNLOAD_SECONDS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('install','register','check-update','update'))
     parser.add_argument('--version', help='explicit GitHub release tag')
     parser.add_argument('--bundle', help='trusted local release directory for offline validation')
+    parser.add_argument('--download-timeout', type=download_seconds, default=180,
+                        help='total seconds per HTTPS resource including retries (30..3600; default 180)')
     args = parser.parse_args()
+    DOWNLOAD_SECONDS = args.download_timeout
     if args.action in ('install','check-update','update') and not args.version: parser.error('--version required')
     if args.action=='check-update': check_update(args); return
     preflight()

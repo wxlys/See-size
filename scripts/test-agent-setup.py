@@ -14,6 +14,48 @@ spec=importlib.util.spec_from_file_location('setup',Path(__file__).with_name('ag
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class InstallerTests(unittest.TestCase):
+    def test_download_budget(self):
+        for value in ('30','180','1800','3600'):
+            self.assertEqual(m.download_seconds(value),int(value))
+        for value in ('0','29','3601','-1'):
+            with self.assertRaises(m.argparse.ArgumentTypeError):m.download_seconds(value)
+    def test_verified_cache_reuse_and_corruption(self):
+        import tempfile
+        body=bytearray(32);body[:6]=b'\x7fELF\x02\x01';body[18:20]=(62).to_bytes(2,'little')
+        body=bytes(body);digest=hashlib.sha256(body).hexdigest()
+        with tempfile.TemporaryDirectory() as directory,patch.object(m,'CACHE',Path(directory)),patch.object(m,'prepare_cache'),patch.object(m,'fetch',return_value=body) as fetch:
+            self.assertEqual(m.release_binary('v0.1.0',m.COMPONENTS[0],digest),body)
+            self.assertEqual(m.release_binary('v0.1.1',m.COMPONENTS[0],digest),body)
+            self.assertEqual(fetch.call_count,1)
+            (Path(directory)/m.COMPONENTS[0]).write_bytes(b'corrupt')
+            self.assertEqual(m.release_binary('v0.1.1',m.COMPONENTS[0],digest),body)
+            self.assertEqual(fetch.call_count,2)
+            self.assertFalse((Path(directory)/'.partial').exists())
+    def test_bad_download_not_cached(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory,patch.object(m,'CACHE',Path(directory)),patch.object(m,'prepare_cache'),patch.object(m,'fetch',return_value=b'bad'):
+            with self.assertRaises(ValueError):m.release_binary('v0.1.0',m.COMPONENTS[0],'a'*64)
+            self.assertEqual(list(Path(directory).iterdir()),[])
+    def test_cache_cleanup_and_unknown_refusal(self):
+        cache=MagicMock()
+        for directory in (cache,cache.parent,cache.parent.parent):
+            directory.is_symlink.return_value=False
+            directory.is_dir.return_value=True
+            directory.stat.return_value=types.SimpleNamespace(st_uid=0,st_mode=0o700)
+        def entry(name,age):
+            p=MagicMock();p.name=name
+            p.is_symlink.return_value=False;p.is_file.return_value=True
+            p.stat.return_value=types.SimpleNamespace(st_uid=0,st_mode=0o600,st_mtime=1000000-age,st_size=10)
+            return p
+        old=entry(m.COMPONENTS[0],8*86400);fresh=entry(m.COMPONENTS[1],1);partial=entry('.partial',1)
+        cache.iterdir.return_value=[old,fresh,partial]
+        with patch.object(m,'CACHE',cache),patch.object(m.time,'time',return_value=1000000):m.prepare_cache()
+        old.unlink.assert_called_once();partial.unlink.assert_called_once();fresh.unlink.assert_not_called()
+        unknown=entry('unrelated',0);cache.iterdir.return_value=[unknown]
+        with patch.object(m,'CACHE',cache),self.assertRaises(ValueError):m.prepare_cache()
+        unknown.unlink.assert_not_called()
+        cache.is_symlink.return_value=True
+        with patch.object(m,'CACHE',cache),self.assertRaises(ValueError):m.prepare_cache()
     def response(self, chunks, length=None):
         response=MagicMock()
         response.__enter__.return_value=response
