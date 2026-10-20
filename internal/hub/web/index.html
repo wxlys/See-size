@@ -53,7 +53,12 @@
     .chart-title { color:#9fb1d3; font-size:12px; margin-bottom:7px; display:flex; justify-content:space-between; }
     canvas { width:100%; height:170px; display:block; }
     .chart { position:relative; }
-    .chart-tooltip { position:absolute; left:12px; right:12px; top:28px; background:#18243a; border:1px solid #7ea7ff; border-radius:6px; padding:8px; font-size:12px; white-space:pre-line; pointer-events:none; z-index:2; }
+    .chart-tooltip { position:fixed; background:rgba(10,16,28,.96); border:1px solid #526687; border-radius:8px; padding:12px; font-size:12px; pointer-events:none; z-index:20; max-width:calc(100vw - 16px); }
+    .tip-row { display:flex; justify-content:space-between; gap:24px; margin-top:8px; }
+    .chart-dialog { width:min(1100px,94vw); max-height:92vh; overflow:auto; color:#e8eefc; background:#10182c; border:1px solid #526687; border-radius:14px; padding:20px; }
+    .chart-dialog::backdrop { background:#0009; }
+    .chart-dialog canvas { height:min(55vh,480px); }
+    .chart-expand { padding:0 5px; margin-left:8px; font-size:16px; }
     .empty { color:#92a4c5; text-align:center; padding:56px 20px; border:1px dashed #34466f; border-radius:16px; }
     @media(max-width:760px){header{align-items:start;flex-direction:column}.summary{grid-template-columns:1fr}.metrics,.charts{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:520px){.metrics,.charts{grid-template-columns:1fr}}
@@ -185,12 +190,13 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
 
     function drawLines(canvas, samples, series, ceiling, step){
       const ratio=window.devicePixelRatio||1;
-      const width=Math.max(canvas.clientWidth,220), height=170;
+      const width=Math.max(canvas.clientWidth,220), height=canvas.clientHeight||170;
       const left=66,right=12,top=10,bottom=30,pw=width-left-right,ph=height-top-bottom;
       canvas.width=width*ratio; canvas.height=height*ratio;
       const ctx=canvas.getContext('2d'); ctx.scale(ratio,ratio);
       ctx.clearRect(0,0,width,height);
       ctx.strokeStyle='#263858'; ctx.lineWidth=1;
+      ctx.setLineDash([]);
       const values=series.flatMap(item=>samples.map(item.value)).filter(Number.isFinite);
       const max=Math.max(ceiling||0,...values,1), min=0;
       const start=samples.length?Date.parse(samples[0].at):0,end=samples.length?Date.parse(samples[samples.length-1].at):0;
@@ -202,24 +208,35 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
       let tip=canvas.parentElement.querySelector('.chart-tooltip');
       if(!tip){tip=document.createElement('div');tip.className='chart-tooltip';tip.hidden=true;canvas.parentElement.append(tip);}
       tip.hidden=true;
+      const placeTip=e=>{
+        tip.hidden=false;
+        tip.style.left=Math.max(8,Math.min(e.clientX+14,innerWidth-tip.offsetWidth-8))+'px';
+        tip.style.top=Math.max(8,Math.min(e.clientY-tip.offsetHeight-14,innerHeight-tip.offsetHeight-8))+'px';
+      };
       canvas.onpointerleave=()=>tip.hidden=true;
       canvas.onpointermove=e=>{
         const x=(e.clientX-canvas.getBoundingClientRect().left)*width/canvas.getBoundingClientRect().width;
         if(!samples.length||x<left||x>width-right){tip.hidden=true;return;}
         const time=start+(x-left)/pw*(end-start);
         const sample=samples.reduce((a,b)=>Math.abs(Date.parse(a.at)-time)<Math.abs(Date.parse(b.at)-time)?a:b);
-        if(Math.abs(Date.parse(sample.at)-time)>step*1000){tip.textContent='该时间段无记录';tip.hidden=false;return;}
-        if(network && sample.network_unavailable){tip.textContent='该聚合时段网络数据不可用或统计口径发生变化';tip.hidden=false;return;}
+        if(Math.abs(Date.parse(sample.at)-time)>Math.max(step,10)*1000){tip.textContent='该时间段无记录';placeTip(e);return;}
+        if(network && sample.network_unavailable){tip.textContent='该时段网络数据不可用或统计口径发生变化';placeTip(e);return;}
         const names=network?['下载平均','下载峰值','上传平均','上传峰值']:['平均','峰值'];
-        tip.textContent=new Date(sample.at).toLocaleString()+' · 聚合 '+step+' 秒 · '+sample.count+' 个样本\n'+series.map((s,i)=>names[i]+'：'+format(s.value(sample))).join(' · ');tip.hidden=false;
+        tip.replaceChildren();
+        const heading=document.createElement('div');heading.textContent=new Date(sample.at).toLocaleString();tip.append(heading);
+        series.forEach((s,i)=>{
+          const row=document.createElement('div');row.className='tip-row';
+          const label=document.createElement('span');label.style.color=s.color;label.textContent=(s.peak?'┄ ':'━ ')+names[i];
+          const value=document.createElement('strong');value.textContent=format(s.value(sample));row.append(label,value);tip.append(row);
+        });placeTip(e);
       };
-      for(const item of series){
+      for(const item of [...series].sort((a,b)=>Number(b.peak||false)-Number(a.peak||false))){
         ctx.strokeStyle=item.color; ctx.lineWidth=item.peak?1:2;ctx.setLineDash(item.peak?[3,3]:[]); ctx.lineJoin='round'; ctx.beginPath();
         samples.forEach((sample,index)=>{
           const value=item.value(sample); const x=end===start?left+pw/2:left+(Date.parse(sample.at)-start)*pw/(end-start);
           if(!Number.isFinite(value))return;
           const y=top+ph-(Math.max(min,Math.min(max,value))-min)*ph/(max-min||1);
-          const gap=index && (Date.parse(sample.at)-Date.parse(samples[index-1].at)>step*1000*1.5 || !Number.isFinite(item.value(samples[index-1])) || (network && sample.network_scope!==samples[index-1].network_scope));
+          const gap=index && (Date.parse(sample.at)-Date.parse(samples[index-1].at)>Math.max(step,10)*1000*1.5 || !Number.isFinite(item.value(samples[index-1])) || (network && sample.network_scope!==samples[index-1].network_scope));
           index&&!gap?ctx.lineTo(x,y):ctx.moveTo(x,y);
           ctx.fillStyle=item.color;ctx.fillRect(x-1,y-1,2,2);
         });
@@ -237,7 +254,7 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
         if(!response.ok) throw new Error(`HTTP ${response.status}`);
         const data=await response.json();if(Number(panel.dataset.sequence)!==sequence)return;
         const samples=data.points;
-        panel.querySelector('.history-note').textContent=samples.length?`实际数据：${new Date(data.first).toLocaleString()} — ${new Date(data.last).toLocaleString()} · 每 ${data.step_seconds} 秒聚合`:'所选时间范围暂无数据';
+        panel.querySelector('.history-note').textContent=samples.length?`实际数据：${new Date(data.first).toLocaleString()} — ${new Date(data.last).toLocaleString()}`:'所选时间范围暂无数据';
         const lines=(i,color)=>[{value:s=>i>=3&&s.network_unavailable?NaN:s.average[i],color},{value:s=>i>=3&&s.network_unavailable?NaN:s.peak[i],color,peak:true}];
         drawLines(panel.querySelector('[data-chart="cpu"]'),samples,lines(0,'#65d6ad'),100,data.step_seconds);
         drawLines(panel.querySelector('[data-chart="memory"]'),samples,lines(1,'#7ea7ff'),100,data.step_seconds);
@@ -245,6 +262,53 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
         drawLines(panel.querySelector('[data-chart="disk"]'),samples,lines(2,'#c78cff'),100,data.step_seconds);
         panel.querySelectorAll('.time-axis').forEach(axis=>{axis.textContent=samples.length?`${new Date(samples[0].at).toLocaleString()} — ${new Date(samples[samples.length-1].at).toLocaleString()}`:'';});
       }catch(error){if(Number(panel.dataset.sequence)===sequence)panel.querySelector('.history-note').textContent=`历史读取失败：${error.message}`; }
+    }
+
+    function openChart(agentID, source, range){
+      document.querySelector('.chart-dialog')?.close();
+      const dialog=document.createElement('dialog');dialog.className='chart-dialog';
+      const header=document.createElement('div');header.className='history-head';
+      const title=document.createElement('h3');title.textContent=source.querySelector('.chart-title span').textContent;
+      const select=document.createElement('select');select.setAttribute('aria-label','放大图表时间段');
+      const current=document.createElement('option');current.value='';current.textContent=range==='30m'?'最近 30 分钟':range==='1h'?'最近 1 小时':'最近 24 小时';select.append(current);
+      if(range!=='24h'){
+        const span=range==='30m'?30*60000:3600000,now=Date.now(),horizon=range==='30m'?6:12;
+        const aligned=new Date(now);aligned.setSeconds(0,0);aligned.setMinutes(range==='30m'?Math.floor(aligned.getMinutes()/30)*30:0);
+        for(let end=aligned.getTime();end-span>=now-horizon*3600000;end-=span){
+          const option=document.createElement('option');option.value=new Date(end).toISOString();
+          option.textContent=new Date(end-span).toLocaleString()+' — '+new Date(end).toLocaleTimeString();select.append(option);
+        }
+      }else select.hidden=true;
+      const close=document.createElement('button');close.textContent='关闭';close.onclick=()=>dialog.close();
+      header.append(title,select,close);
+      const note=document.createElement('p');note.className='label';
+      const chart=document.createElement('div');chart.className='chart';
+      const canvas=document.createElement('canvas');canvas.dataset.chart=source.querySelector('canvas').dataset.chart;
+      chart.append(canvas);dialog.append(header,note,chart);document.body.append(dialog);dialog.showModal();
+      let sequence=0,latest=null;const controller=new AbortController();
+      const render=()=>{
+        if(!latest||!dialog.open)return;
+        const lines=(i,color)=>[{value:s=>i>=3&&s.network_unavailable?NaN:s.average[i],color},{value:s=>i>=3&&s.network_unavailable?NaN:s.peak[i],color,peak:true}];
+        const definitions={cpu:lines(0,'#65d6ad'),memory:lines(1,'#7ea7ff'),disk:lines(2,'#c78cff'),network:[...lines(3,'#64d8ff'),...lines(4,'#f6b86a')]};
+        drawLines(canvas,latest.points,definitions[canvas.dataset.chart],canvas.dataset.chart==='network'?0:100,latest.step_seconds);
+      };
+      const load=async()=>{
+        const request=++sequence;latest=null;canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+        chart.querySelector('.chart-tooltip')?.setAttribute('hidden','');note.textContent='正在读取历史';
+        try{
+          const query=new URLSearchParams({range});if(select.value)query.set('to',select.value);
+          const response=await fetch(`/api/v1/servers/${encodeURIComponent(agentID)}/trend?${query}`,{cache:'no-store',signal:controller.signal});
+          if(!response.ok)throw new Error(`HTTP ${response.status}`);
+          const data=await response.json();if(request!==sequence||!dialog.open)return;
+          latest=data;note.textContent=data.points.length?`实际数据：${new Date(data.first).toLocaleString()} — ${new Date(data.last).toLocaleString()} · 实线平均值 / 虚线峰值（相同时重合）`:'所选时段暂无数据';
+          render();
+        }catch(e){if(request===sequence&&dialog.open)note.textContent='读取失败：'+e.message;}
+      };
+      select.onchange=load;
+      dialog.addEventListener('click',e=>{const r=dialog.getBoundingClientRect();if(e.target===dialog&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))dialog.close();});
+      const observer=new ResizeObserver(render);observer.observe(chart);
+      dialog.addEventListener('close',()=>{controller.abort();observer.disconnect();dialog.remove();});
+      load();
     }
 
     function bindHistoryButtons(root){
@@ -259,7 +323,13 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
         try{const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/events/${button.dataset.ack}/ack`,{method:'POST',headers:{Authorization:'Bearer '+token}});if(!res.ok)throw new Error(`HTTP ${res.status}`);await loadEvents(id,panel.dataset.before||'');}catch(err){panel.querySelector('.event-note').textContent=`处理失败：${err.message}`;button.disabled=false;}
       });
       root.querySelector('select').addEventListener('change',()=>loadHistory(decodeURIComponent(root.querySelector('[data-history-toggle]').dataset.historyToggle)));
-      root.querySelectorAll('.chart').forEach(chart=>{const axis=document.createElement('div');axis.className='time-axis label';chart.append(axis);});
+      root.querySelectorAll('.chart').forEach(chart=>{
+        const axis=document.createElement('div');axis.className='time-axis label';chart.append(axis);
+        const button=document.createElement('button');button.className='chart-expand';button.textContent='⛶';
+        button.setAttribute('aria-label','放大'+chart.querySelector('.chart-title span').textContent+'图表');
+        button.onclick=()=>openChart(id,chart,root.querySelector('[data-history] select').value);
+        chart.querySelector('.chart-title').append(button);
+      });
       root.querySelectorAll('[data-disk-toggle]').forEach(button=>button.addEventListener('click',()=>{
         const key=button.dataset.diskToggle,id=decodeURIComponent(key);
         diskExpanded.has(id)?diskExpanded.delete(id):diskExpanded.add(id);
@@ -330,7 +400,7 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
             <section class="history" data-disk="${key}" ${diskExpanded.has(s.agent_id)?'':'hidden'}>正在读取目录快照</section>
             <section class="history" data-history="${key}" ${isExpanded?'':'hidden'}>
               <div class="history-head"><h3>资源趋势</h3><select aria-label="趋势时间范围"><option value="30m">最近 30 分钟</option><option value="1h" selected>最近 1 小时</option><option value="24h">最近 24 小时</option></select></div>
-              <p class="history-note label">正在读取历史</p><p class="label">实线：区间平均值 · 虚线：区间峰值 · 空白：该时间段无记录；横轴显示实际已有数据范围</p>
+              <p class="history-note label">正在读取历史</p><p class="label">实线：节点时段平均值 · 虚线：节点时段峰值（相同时重合）· 空白：无记录；上方指标为最新采样，不代表历史平均值</p>
               <div class="charts">
                 <div class="chart"><div class="chart-title"><span>CPU</span><span>%</span></div><canvas data-chart="cpu"></canvas></div>
                 <div class="chart"><div class="chart-title"><span>内存</span><span>%</span></div><canvas data-chart="memory"></canvas></div>

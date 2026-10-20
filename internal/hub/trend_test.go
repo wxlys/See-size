@@ -3,10 +3,41 @@ package hub
 import (
 	"context"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestTrendHistoricalWindowBounds(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(t.TempDir(), "windows.db"), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	app, _ := NewServer("secret", store)
+	now := time.Date(2026, 10, 20, 12, 15, 0, 0, time.UTC)
+	app.now = func() time.Time { return now }
+	for _, tc := range []struct {
+		span, end string
+		status    int
+	}{
+		{"30m", "2026-10-20T12:00:00Z", 200},
+		{"1h", "2026-10-20T02:00:00Z", 200},
+		{"30m", "2026-10-20T06:30:00Z", 400},
+		{"1h", "2026-10-20T01:00:00Z", 400},
+		{"30m", "2026-10-20T13:00:00Z", 400},
+		{"24h", "2026-10-20T12:00:00Z", 400},
+		{"1h", "invalid", 400},
+	} {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/api/v1/servers/test/trend?range="+tc.span+"&to="+url.QueryEscape(tc.end), nil)
+		app.Handler().ServeHTTP(res, req)
+		if res.Code != tc.status {
+			t.Fatalf("%+v: %d %s", tc, res.Code, res.Body.String())
+		}
+	}
+}
 
 func TestTrendAllRecordsGapsAndPeaks(t *testing.T) {
 	s, err := OpenSQLite(filepath.Join(t.TempDir(), "trend.db"), time.Minute)

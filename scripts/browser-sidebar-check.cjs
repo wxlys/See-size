@@ -34,7 +34,7 @@ const assert=require('node:assert/strict');
   await visible.getByText('/fixture-b',{exact:false}).waitFor();
   await page.getByRole('button',{name:'server-a'}).click();
   assert.equal(await visible.locator('select').inputValue(),'24h');
-  await page.waitForFunction(()=>document.querySelector('[data-history="a"] .history-note').textContent.includes('240 秒'));
+  await page.waitForFunction(()=>document.querySelector('[data-history="a"] .history-note').textContent.includes('实际数据'));
   await page.getByRole('button',{name:'server-b'}).click();
   await page.evaluate(()=>{window.savedCard=document.querySelector('#servers > .server:not([hidden])');});
   // Reordering and offline status must not change the selection or DOM identity.

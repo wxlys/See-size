@@ -116,6 +116,18 @@ func (s *Server) handleTrend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	to := s.now().UTC()
+	if raw := r.URL.Query().Get("to"); raw != "" {
+		end, err := time.Parse(time.RFC3339, raw)
+		lookback := 6 * time.Hour
+		if duration == time.Hour {
+			lookback = 12 * time.Hour
+		}
+		if err != nil || duration == 24*time.Hour || end.After(to) || end.Add(-duration).Before(to.Add(-lookback)) {
+			writeJSON(w, 400, map[string]string{"error": "historical window outside allowed range"})
+			return
+		}
+		to = end.UTC()
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	result, err := store.Trend(ctx, r.PathValue("agentID"), to.Add(-duration), to)
