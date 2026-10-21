@@ -59,6 +59,14 @@
     .chart-dialog::backdrop { background:#0009; }
     .chart-dialog canvas { height:min(55vh,480px); }
     .chart-expand { padding:0 5px; margin-left:8px; font-size:16px; }
+    .disk-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:14px 0; }
+    .disk-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; padding:10px 0; border-bottom:1px solid #263858; }
+    .disk-name { display:flex; align-items:center; gap:6px; min-width:0; overflow-wrap:anywhere; }
+    .disk-toggle { flex:none; padding:2px 6px; }
+    .disk-measure { text-align:right; font-variant-numeric:tabular-nums; }
+    .disk-share { margin-top:6px; height:5px; background:#1b2942; border-radius:4px; overflow:hidden; }
+    .disk-share span { display:block; height:100%; background:#65bfa8; }
+    .disk-positive { color:#f6b86a; }.disk-negative { color:#79e2ae; }
     .empty { color:#92a4c5; text-align:center; padding:56px 20px; border:1px dashed #34466f; border-radius:16px; }
     @media(max-width:760px){header{align-items:start;flex-direction:column}.summary{grid-template-columns:1fr}.metrics,.charts{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:520px){.metrics,.charts{grid-template-columns:1fr}}
@@ -164,6 +172,78 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
         const next=panel.querySelector('[data-event-next]');next.disabled=!data.next_cursor;next.dataset.cursor=data.next_cursor||'';
       }catch(e){panel.querySelector('.event-note').textContent=`读取失败：${e.message}`;}
     }
+    function renderDiskTree(panel){
+      const state=panel.diskView,data=state.data,current=data.snapshots[0];
+      const reference=state.source==='reference'&&data.reference_snapshot;
+      const snap=reference||current,comparable=!reference&&current.complete&&data.comparable;
+      if(!comparable&&state.sort==='growth')state.sort='size';
+      const changes=new Map((comparable?data.changes:[]).map(c=>[c.path,c.delta]));
+      const nodes=new Map(snap.nodes.map(n=>[n.path,{...n,delta:changes.get(n.path)||0,children:[]}]));
+      if(comparable)for(const c of data.changes)if(!nodes.has(c.path))nodes.set(c.path,{path:c.path,bytes:c.bytes,delta:c.delta,children:[],removed:true});
+      if(!nodes.has('.'))nodes.set('.',{path:'.',bytes:0,delta:0,children:[]});
+      for(const node of nodes.values()){
+        if(node.path==='.')continue;
+        let parent=node.path.includes('/')?node.path.slice(0,node.path.lastIndexOf('/')):'.';
+        while(!nodes.has(parent)&&parent!=='.')parent=parent.includes('/')?parent.slice(0,parent.lastIndexOf('/')):'.';
+        nodes.get(parent).children.push(node);
+      }
+      const compare=(a,b)=>(state.sort==='growth'?b.delta-a.delta:b.bytes-a.bytes)||a.path.localeCompare(b.path);
+      for(const n of nodes.values())n.children.sort(compare);
+      const total=nodes.get('.').bytes,visible=[];
+      function visit(node,depth){visible.push({node,depth});if(state.open.has(node.path))for(const child of node.children)visit(child,depth+1);}
+      visit(nodes.get('.'),0);
+      panel.querySelector('.disk-source-note').textContent=reference?`参考：${new Date(snap.at).toLocaleString()} 的完整结果，不代表当前占用；不计算本次增量。`:
+        (current.complete?'当前完整结果':'当前部分结果：大小仅为已扫描部分，不代表完整占用。');
+      const growth=panel.querySelector('[data-disk-sort] option[value="growth"]');growth.disabled=!comparable;
+      panel.querySelector('[data-disk-sort]').value=state.sort;
+      panel.querySelector('.disk-tree').innerHTML=visible.slice(0,state.limit).map(({node:n,depth})=>{
+        const share=total>0?Math.min(100,Math.max(0,n.bytes/total*100)):0;
+        return `<div class="disk-row" data-directory="${esc(n.path)}"><div><div class="disk-name" style="padding-left:${Math.min(depth,6)*14}px">`+
+          (n.children.length?`<button class="disk-toggle" data-disk-expand="${esc(n.path)}" aria-expanded="${state.open.has(n.path)}" aria-label="${state.open.has(n.path)?'折叠':'展开'} ${esc(n.path)}">${state.open.has(n.path)?'▾':'▸'}</button>`:'<span aria-hidden="true">·</span>')+
+          `<span title="${esc(n.path)}">${esc(n.path==='.'?'扫描根目录':n.path)}${n.removed?'（已移除）':''}</span></div>`+
+          `<div class="disk-share" aria-hidden="true"><span style="width:${share}%"></span></div></div><div class="disk-measure">${fmtBytes(n.bytes)}`+
+          (comparable?` <span class="${n.delta>0?'disk-positive':n.delta<0?'disk-negative':''}">${n.delta>=0?'+':'−'}${fmtBytes(Math.abs(n.delta))}</span>`:'')+
+          `<div class="label">${total>0?share.toFixed(1)+'%':'—'}</div></div></div>`;
+      }).join('');
+      panel.querySelector('[data-disk-more]').hidden=visible.length<=state.limit;
+    }
+
+    function renderDisk(panel,data){
+      const snap=data.snapshots[0];
+      if(!snap){panel.textContent='暂无目录快照。请在该服务器上手动运行目录扫描。';panel.diskView=null;return;}
+      let state=panel.diskView;
+      const scope=snap.root+'\n'+snap.depth;
+      if(!state||state.scope!==scope)state={scope,sort:'size',source:data.reference_snapshot?'reference':'current',open:new Set(['.']),limit:500};
+      else if(data.reference_snapshot&&state.data.snapshots[0].complete)state.source='reference';
+      if(!data.reference_snapshot)state.source='current';
+      state.data=data;panel.diskView=state;
+      const reasons={'entry limit':'达到扫描条目上限','time limit or cancellation':'达到时间预算或扫描已取消','unreadable or excluded entries':'存在无权限、不可读取或已排除的条目'};
+      const warnings=(data.alerts||[]).slice(0,20).map(a=>`<p style="color:#f6b86a">空间增长提示：${esc(a.path)} +${fmtBytes(a.delta)}<br><span class="label">${esc(new Date(a.from).toLocaleString())} 至 ${esc(new Date(a.to).toLocaleString())}</span></p>`).join('');
+      panel.innerHTML=`<h3>目录空间分析</h3><p><span class="pill ${snap.complete?'online':'offline'}">${snap.complete?'扫描完整':'扫描不完整'}</span></p>`+
+        `<p class="label">扫描条目：${Number(snap.entries)||0} · 跳过条目：${Number(snap.skipped)||0}</p>`+
+        (!snap.complete?`<p class="label">原因：${esc(reasons[snap.reason]||(snap.reason?'扫描未完成（'+snap.reason+'）':'存在跳过项或达到扫描限制'))}。暂停本次增量比较与增长告警。</p>`:'')+
+        `<p class="label">${esc(snap.root)} · ${esc(new Date(snap.at).toLocaleString())}</p>`+
+        `<p class="label">逻辑文件大小；占比相对于所展示结果的扫描根目录，父子目录不能相加。${data.comparable?'增量对比相邻两次完整扫描。':'暂无可比较的两次完整扫描。'}</p>`+
+        `<p class="label">增长提示阈值：每次比较 ${fmtBytes(data.growth_threshold_bytes)}。提示仅反映两次扫描间净增量，不代表瞬时峰值或已确定原因。</p>`+warnings+
+        `<div class="disk-controls"><label>排序 <select data-disk-sort aria-label="目录排序"><option value="size">占用从大到小</option><option value="growth">增长从大到小</option></select></label>`+
+        (data.reference_snapshot?`<label>查看结果 <select data-disk-source aria-label="目录结果来源"><option value="reference">上次完整结果（参考）</option><option value="current">本次部分结果</option></select></label>`:'')+
+        `</div><p class="disk-source-note label"></p><div class="disk-tree"></div><button data-disk-more hidden>显示更多目录</button>`;
+      panel.querySelector('[data-disk-sort]').value=state.sort;
+      const source=panel.querySelector('[data-disk-source]');if(source)source.value=state.source;
+      renderDiskTree(panel);
+      panel.onchange=e=>{
+        if(e.target.matches('[data-disk-sort]'))state.sort=e.target.value;
+        else if(e.target.matches('[data-disk-source]'))state.source=e.target.value;
+        else return;
+        state.limit=500;renderDiskTree(panel);
+      };
+      panel.onclick=e=>{
+        const toggle=e.target.closest('[data-disk-expand]');
+        if(toggle){const path=toggle.dataset.diskExpand;state.open.has(path)?state.open.delete(path):state.open.add(path);renderDiskTree(panel);}
+        else if(e.target.closest('[data-disk-more]')){state.limit+=500;renderDiskTree(panel);}
+      };
+    }
+
     async function loadDisk(id){
       const panel=document.querySelector(`[data-disk="${CSS.escape(encodeURIComponent(id))}"]`);
       if(!panel)return;
@@ -172,16 +252,10 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
       try{
         const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/disk`);
         if(!res.ok)throw new Error(`HTTP ${res.status}`);
-        const data=await res.json(), snap=data.snapshots[0];
+        const data=await res.json();
         const signature=JSON.stringify(data);
         if(panel.dataset.signature===signature)return;
-        if(!snap){panel.textContent='暂无目录快照。请在该服务器上手动运行目录扫描。';return;}
-        const deltas=new Map(data.changes.map(c=>[c.path,c.delta]));
-        const warnings=(data.alerts||[]).slice(0,20).map(a=>`<p style="color:#f6b86a">空间增长提示：${esc(a.path)} +${fmtBytes(a.delta)}<br><span class="label">${esc(new Date(a.from).toLocaleString())} 至 ${esc(new Date(a.to).toLocaleString())}</span></p>`).join('');
-        panel.innerHTML=`<h3>目录空间分析</h3><p><span class="pill ${snap.complete?'online':'offline'}">${snap.complete?'扫描完整':'扫描不完整'}</span></p><p class="label">扫描条目：${Number(snap.entries)||0} · 跳过条目：${Number(snap.skipped)||0}${snap.complete?'':' · 存在跳过项或达到扫描限制，暂停增量判断'}</p><p class="label">${esc(snap.root)} · ${esc(new Date(snap.at).toLocaleString())}</p><p class="label">逻辑文件大小；父目录包含子目录，不能相加。${data.comparable?'增量对比上一次完整扫描。':'暂无可比较的两次完整扫描。'}</p>`+
-          `<p class="label">增长提示阈值：每次比较 ${fmtBytes(data.growth_threshold_bytes)}。提示仅反映两次扫描间净增量，不代表瞬时峰值或已确定原因。</p>`+warnings+
-          snap.nodes.slice(0,500).map(n=>`<div style="display:flex;justify-content:space-between;padding:6px 0 6px ${Math.min(n.path.split('/').length,6)*14}px"><span>${esc(n.path)}</span><span>${fmtBytes(n.bytes)}${data.comparable?' · '+((deltas.get(n.path)||0)>=0?'+':'−')+fmtBytes(Math.abs(deltas.get(n.path)||0)):''}</span></div>`).join('')+
-          (snap.nodes.length>500?'<p>仅展示前 500 个目录，完整结果保存在快照中。</p>':'');
+        renderDisk(panel,data);
         panel.dataset.signature=signature;
         panel.removeAttribute('title');
       }catch(e){if(!panel.dataset.signature)panel.textContent=`目录分析读取失败：${e.message}`;else panel.title=`更新失败，保留上次结果：${e.message}`;}
@@ -322,7 +396,7 @@ async function devices(){const res=await fetch('/api/v1/devices');if(!res.ok)thr
         const token=input.value;input.value='';button.disabled=true;
         try{const res=await fetch(`/api/v1/servers/${encodeURIComponent(id)}/events/${button.dataset.ack}/ack`,{method:'POST',headers:{Authorization:'Bearer '+token}});if(!res.ok)throw new Error(`HTTP ${res.status}`);await loadEvents(id,panel.dataset.before||'');}catch(err){panel.querySelector('.event-note').textContent=`处理失败：${err.message}`;button.disabled=false;}
       });
-      root.querySelector('select').addEventListener('change',()=>loadHistory(decodeURIComponent(root.querySelector('[data-history-toggle]').dataset.historyToggle)));
+      root.querySelector('[data-history] select').addEventListener('change',()=>loadHistory(decodeURIComponent(root.querySelector('[data-history-toggle]').dataset.historyToggle)));
       root.querySelectorAll('.chart').forEach(chart=>{
         const axis=document.createElement('div');axis.className='time-axis label';chart.append(axis);
         const button=document.createElement('button');button.className='chart-expand';button.textContent='⛶';

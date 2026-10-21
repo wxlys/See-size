@@ -41,6 +41,32 @@ func (s *SQLiteStore) DiskSnapshots(ctx context.Context, id string) ([]disk.Snap
 	}
 	return out, rows.Err()
 }
+
+// CompleteDiskReference finds a prior complete scan with the same scope.
+// It is a display reference only: it never makes a partial scan comparable.
+func (s *SQLiteStore) CompleteDiskReference(ctx context.Context, current disk.Snapshot) (*disk.Snapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT snapshot_json FROM disk_snapshots
+		WHERE agent_id=? AND root=? AND at_ns<?
+		AND json_extract(snapshot_json,'$.complete')=1
+		AND json_extract(snapshot_json,'$.depth')=? ORDER BY at_ns DESC LIMIT 1`,
+		current.AgentID, current.Root, current.At.UnixNano(), current.Depth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var body []byte
+	if err := rows.Scan(&body); err != nil {
+		return nil, err
+	}
+	var snap disk.Snapshot
+	if err := json.Unmarshal(body, &snap); err != nil {
+		return nil, err
+	}
+	return &snap, nil
+}
 func (s *Server) handleDiskUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r) {
 		writeJSON(w, 401, map[string]string{"error": "invalid agent credential"})
@@ -107,5 +133,17 @@ func (s *Server) handleDisk(w http.ResponseWriter, r *http.Request) {
 		changes, comparable = disk.Compare(snapshots[1], snapshots[0])
 		alerts = disk.GrowthAlerts(snapshots[1], snapshots[0], s.growthThreshold)
 	}
-	writeJSON(w, 200, map[string]any{"snapshots": snapshots, "comparable": comparable, "changes": changes, "alerts": alerts, "growth_threshold_bytes": s.growthThreshold})
+	var reference *disk.Snapshot
+	if len(snapshots) > 0 && !snapshots[0].Complete {
+		if refs, ok := store.(interface {
+			CompleteDiskReference(context.Context, disk.Snapshot) (*disk.Snapshot, error)
+		}); ok {
+			reference, err = refs.CompleteDiskReference(r.Context(), snapshots[0])
+			if err != nil {
+				writeJSON(w, 500, map[string]string{"error": "unable to read complete reference"})
+				return
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"snapshots": snapshots, "reference_snapshot": reference, "comparable": comparable, "changes": changes, "alerts": alerts, "growth_threshold_bytes": s.growthThreshold})
 }
